@@ -58,6 +58,31 @@ class TestClient:
         assert config.storage_contract_address == "0xstorage"
 
     @pytest.mark.integration
+    def test_latest_block_number(self):
+        """Integration test: LatestBlockNumber returns a positive block number against a live chain."""
+        dial_uri = pick_dial_uri()
+        private_key = pick_private_key()
+
+        from ..ipctest.ipctest import new_funded_account, to_wei
+
+        funded_account = new_funded_account(
+            source_private_key=private_key,
+            dial_uri=dial_uri,
+            amount_wei=to_wei(0.01),
+        )
+
+        config = Config(
+            dial_uri=dial_uri,
+            private_key=funded_account.key.hex(),
+            storage_contract_address="0x" + "0" * 40,
+            access_contract_address="0x" + "0" * 40,
+        )
+
+        client = Client.dial(config)
+        block_number = client.latest_block_number()
+        assert block_number > 0, f"Expected a positive block number, got {block_number}"
+
+    @pytest.mark.integration
     def test_dial_connection(self):
         dial_uri = pick_dial_uri()
         private_key = pick_private_key()

@@ -146,6 +146,20 @@ class IPC:
         from private.retry.retry import WithRetry
         self.with_retry = with_retry if with_retry is not None else WithRetry(max_attempts=5, base_delay=0.1)
 
+    def latest_block_number(self, ctx) -> int:
+        """Returns the most recently finalized block number from the blockchain node.
+
+        Wraps the IPC client call with SDK-typed error handling and observability instrumentation.
+        """
+        logging.debug("IPC.latest_block_number: start")
+        try:
+            result = self.ipc.latest_block_number()
+            logging.debug(f"IPC.latest_block_number: result={result}")
+            return result
+        except Exception as e:
+            logging.error(f"IPC.latest_block_number failed: {e}")
+            raise SDKError(f"failed to get latest block number: {e}")
+
     def create_bucket(self, ctx, name: str) -> IPCBucketCreateResult:
         if len(name) < MIN_BUCKET_NAME_LENGTH:
             raise SDKError("invalid bucket name")
