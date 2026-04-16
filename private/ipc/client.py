@@ -184,6 +184,13 @@ class Client:
     def chain_id(self) -> int:
         return self._chain_id
 
+    def latest_block_number(self) -> int:
+        """Returns the latest block number from the blockchain via eth_blockNumber."""
+        try:
+            return self.eth.eth.block_number
+        except Exception as e:
+            raise RuntimeError(f"failed to get latest block number: {e}")
+
     def wait_for_tx(self, tx_hash: Union[str, bytes], timeout: float = 120.0) -> dict:
         if isinstance(tx_hash, bytes):
             tx_hash = tx_hash.hex()
