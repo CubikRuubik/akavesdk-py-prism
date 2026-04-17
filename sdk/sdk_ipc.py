@@ -20,7 +20,7 @@ from .model import (
     IPCBucketCreateResult, IPCBucket, IPCFileMeta, IPCFileListItem,
     IPCFileMetaV2, IPCFileChunkUploadV2, FileBlockUpload,
     FileBlockDownload, Chunk, IPCFileDownload, FileChunkDownload,
-    IPCFileUpload, new_ipc_file_upload, UploadState
+    IPCFileUpload, new_ipc_file_upload, UploadState, BlockInfo
 )
 
 class TxWaitSignal:
@@ -146,10 +146,15 @@ class IPC:
         from private.retry.retry import WithRetry
         self.with_retry = with_retry if with_retry is not None else WithRetry(max_attempts=5, base_delay=0.1)
 
-    def latest_block_number(self, ctx) -> int:
-        """Returns the latest block number from the connected blockchain node."""
+    def latest_block_number(self, ctx) -> BlockInfo:
+        """Returns the latest block info from the connected blockchain node."""
         try:
-            return self.ipc.latest_block_number()
+            info = self.ipc.latest_block_number()
+            return BlockInfo(
+                number=info.number,
+                time=info.time,
+                hash=info.hash.hex() if isinstance(info.hash, (bytes, bytearray)) else info.hash,
+            )
         except Exception as e:
             logging.error(f"IPC latest_block_number failed: {e}")
             raise SDKError(f"failed to get latest block number: {e}")
