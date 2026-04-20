@@ -1,9 +1,10 @@
 import pytest
 from unittest.mock import Mock
+from datetime import datetime, timezone
 
 from sdk.sdk_ipc import IPC
 from sdk.config import SDKConfig, SDKError
-from sdk.model import IPCBucketCreateResult
+from sdk.model import IPCBucketCreateResult, BlockInfo
 
 
 class TestCreateBucket:
@@ -73,22 +74,38 @@ class TestLatestBlockNumber:
         self.ipc = IPC(self.mock_client, self.mock_conn, self.mock_ipc, self.config)
 
     def test_latest_block_number_returns_nonzero(self):
-        """Test that latest_block_number returns a positive block number."""
-        self.mock_ipc.latest_block_number.return_value = 42
+        """Test that latest_block_number returns a BlockInfo with positive block number."""
+        mock_info = Mock()
+        mock_info.number = 42
+        mock_info.time = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        mock_info.hash = bytes.fromhex("abcdef1234567890" * 4)
+        self.mock_ipc.latest_block_number.return_value = mock_info
 
         result = self.ipc.latest_block_number(None)
 
-        assert result == 42
-        assert result > 0
+        assert isinstance(result, BlockInfo)
+        assert result.number == 42
+        assert result.number > 0
+        assert result.time is not None
+        assert result.hash != "" and result.hash != "0" * 64
         self.mock_ipc.latest_block_number.assert_called_once()
 
-    def test_latest_block_number_returns_int(self):
-        """Test that latest_block_number returns an integer."""
-        self.mock_ipc.latest_block_number.return_value = 100
+    def test_latest_block_number_returns_block_info(self):
+        """Test that latest_block_number returns a BlockInfo with all three fields."""
+        ts = datetime(2024, 6, 15, 12, 0, 0, tzinfo=timezone.utc)
+        mock_info = Mock()
+        mock_info.number = 100
+        mock_info.time = ts
+        mock_info.hash = bytes.fromhex("deadbeef" * 8)
+        self.mock_ipc.latest_block_number.return_value = mock_info
 
         result = self.ipc.latest_block_number(None)
 
-        assert isinstance(result, int)
+        assert isinstance(result, BlockInfo)
+        assert result.number == 100
+        assert result.time == ts
+        assert isinstance(result.hash, str)
+        assert len(result.hash) > 0
 
     def test_latest_block_number_propagates_error(self):
         """Test that errors from the underlying client are wrapped as SDKError."""

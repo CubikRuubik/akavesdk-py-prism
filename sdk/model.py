@@ -313,3 +313,11 @@ class ErrMissingArchivalBlock(Exception):
     def __init__(self, block_cid: str):
         self.block_cid = block_cid
         super().__init__(f"missing archival block metadata for block CID {block_cid}")
+
+
+@dataclass
+class BlockInfo:
+    """Contains block metadata returned by LatestBlockNumber."""
+    number: int        # block number (uint64)
+    time: datetime     # block timestamp
+    hash: str          # block hash as a hex-encoded string

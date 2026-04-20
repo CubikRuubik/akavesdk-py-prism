@@ -1,6 +1,7 @@
 import time
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any, Union
 from web3 import Web3
 from web3.middleware.proof_of_authority import ExtraDataToPOAMiddleware
@@ -30,6 +31,14 @@ class ContractsAddresses:
 
 class TransactionFailedError(Exception):
     pass
+
+
+@dataclass
+class BlockInfo:
+    """Internal block metadata returned by latest_block_number."""
+    number: int
+    time: datetime
+    hash: bytes  # native hash type; serialised to hex at the SDK layer
 
 
 class Client:    
@@ -184,10 +193,13 @@ class Client:
     def chain_id(self) -> int:
         return self._chain_id
 
-    def latest_block_number(self) -> int:
-        """Returns the latest block number from the blockchain via eth_blockNumber."""
+    def latest_block_number(self) -> BlockInfo:
+        """Returns the latest block info from the blockchain."""
         try:
-            return self.eth.eth.block_number
+            number = self.eth.eth.block_number
+            block = self.eth.eth.get_block(number)
+            ts = datetime.fromtimestamp(block['timestamp'], tz=timezone.utc)
+            return BlockInfo(number=number, time=ts, hash=bytes(block['hash']))
         except Exception as e:
             raise RuntimeError(f"failed to get latest block number: {e}")
 
