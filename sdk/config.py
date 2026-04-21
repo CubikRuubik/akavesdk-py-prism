@@ -58,13 +58,8 @@ def validate_hex_string(hex_string: str) -> bool:
 
 ## [Test Configurations]
 
-DEFAULT_CONFIG_TEST_STREAMING_CONN = {
-    'AKAVE_SDK_NODE': 'connect.akave.ai:5000',  
-    'ENCRYPTION_KEY': '',  
-}
-
 DEFAULT_CONFIG_TEST_SDK_CONN = {
-    'AKAVE_SDK_NODE': 'connect.akave.ai:5000',  # For streaming operations
+    'AKAVE_SDK_NODE': 'connect.akave.ai:5000',
     'AKAVE_IPC_NODE': 'connect.akave.ai:5500',  # For IPC operations
     'ETHEREUM_NODE_URL': 'https://n3-us.akave.ai/ext/bc/2JMWNmZbYvWcJRPPy1siaDBZaDGTDAaqXoY5UBKh4YrhNFzEce/rpc',
     'STORAGE_CONTRACT_ADDRESS': '0x9Aa8ff1604280d66577ecB5051a3833a983Ca3aF',  # Will be obtained from node
@@ -97,7 +92,6 @@ class SDKConfig:
     chunk_buffer: int = 10
     encryption_key: Optional[bytes] = None
     private_key: Optional[str] = None
-    streaming_max_blocks_in_chunk: int = 32
     connection_timeout: Optional[int] = 30
     max_retries: Optional[int] = 3
     backoff_delay: Optional[int] = 1

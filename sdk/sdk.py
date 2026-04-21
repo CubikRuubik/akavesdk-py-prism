@@ -116,13 +116,6 @@ class WithPrivateKey(SDKOption):
     def apply(self, sdk: 'SDK'):
         sdk.private_key = self.key
 
-class WithStreamingMaxBlocksInChunk(SDKOption):
-    def __init__(self, max_blocks_in_chunk: int):
-        self.max_blocks_in_chunk = max_blocks_in_chunk
-    
-    def apply(self, sdk: 'SDK'):
-        sdk.streaming_max_blocks_in_chunk = self.max_blocks_in_chunk
-
 class WithErasureCoding(SDKOption):
     def __init__(self, parity_blocks: int):
         self.parity_blocks = parity_blocks
