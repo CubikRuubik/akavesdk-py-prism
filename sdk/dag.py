@@ -158,7 +158,18 @@ class ChunkDAG:
     encoded_size: int                  # encoded size (was proto_node_size)
     blocks: List[FileBlockUpload]      # Blocks in the chunk
 
-def build_dag(ctx: Any, reader: BinaryIO, block_size: int) -> ChunkDAG:
+def build_dag(ctx: Any, reader: BinaryIO, block_size: int, encryption_key: bytes = b"") -> ChunkDAG:
+    """Build a chunk DAG from reader data.
+
+    Args:
+        ctx: Context (unused, kept for API compatibility).
+        reader: Source of raw bytes to chunk.
+        block_size: Maximum size of each block in bytes.
+        encryption_key: Optional 32-byte key.  When non-empty each block is
+            encrypted at the block level (using its 0-based index as HKDF info)
+            before its CID is computed and the DAG node is built.  Callers that
+            do not need encryption must pass an empty bytes value (the default).
+    """
     try:
         data = reader.read()
         if not data:
@@ -169,8 +180,14 @@ def build_dag(ctx: Any, reader: BinaryIO, block_size: int) -> ChunkDAG:
         blocks = []
         
         if len(data) <= block_size:
-            chunk_cid, encoded_data = _create_unixfs_file_node(data)
-            proto_node_size = len(encoded_data)
+            block_data = data
+            if encryption_key:
+                try:
+                    from private.encryption import encrypt as _enc
+                    block_data = _enc(encryption_key, block_data, b"0")
+                except Exception as e:
+                    raise DAGError(f"block encryption failed: {e}")
+            chunk_cid, encoded_data = _create_unixfs_file_node(block_data)
             
             blocks = [FileBlockUpload(
                 cid=str(chunk_cid) if hasattr(chunk_cid, '__str__') else chunk_cid,
@@ -180,11 +197,19 @@ def build_dag(ctx: Any, reader: BinaryIO, block_size: int) -> ChunkDAG:
             
         else:
             offset = 0
+            block_idx = 0
             pb_links = []
             
             while offset < len(data):
                 end_offset = min(offset + block_size, len(data))
                 block_data = data[offset:end_offset]
+
+                if encryption_key:
+                    try:
+                        from private.encryption import encrypt as _enc
+                        block_data = _enc(encryption_key, block_data, str(block_idx).encode())
+                    except Exception as e:
+                        raise DAGError(f"block encryption failed at index {block_idx}: {e}")
                 
                 block_cid, block_encoded_data = _create_unixfs_file_node(block_data)
                 
@@ -206,6 +231,7 @@ def build_dag(ctx: Any, reader: BinaryIO, block_size: int) -> ChunkDAG:
                         pass
                 
                 offset = end_offset
+                block_idx += 1
             
             chunk_cid, encoded_size = _create_chunk_dag_root_node(blocks, pb_links)
             raw_size = raw_data_size
