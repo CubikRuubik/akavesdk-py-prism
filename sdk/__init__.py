@@ -26,7 +26,6 @@ try:
         WithMetadataEncryption,
         WithEncryptionKey,
         WithPrivateKey,
-        WithStreamingMaxBlocksInChunk,
         WithErasureCoding,
         WithChunkBuffer,
         WithBatchSize,
@@ -112,10 +111,6 @@ except ImportError as e:
             raise ImportError("SDK not available due to missing dependencies")
     
     class WithPrivateKey:
-        def __init__(self, *args, **kwargs):
-            raise ImportError("SDK not available due to missing dependencies")
-    
-    class WithStreamingMaxBlocksInChunk:
         def __init__(self, *args, **kwargs):
             raise ImportError("SDK not available due to missing dependencies")
     
@@ -269,7 +264,6 @@ __all__ = [
     'WithMetadataEncryption',
     'WithEncryptionKey',
     'WithPrivateKey',
-    'WithStreamingMaxBlocksInChunk',
     'WithErasureCoding',
     'WithChunkBuffer',
     'WithoutRetry',

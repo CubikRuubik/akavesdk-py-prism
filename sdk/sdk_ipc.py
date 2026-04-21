@@ -138,7 +138,7 @@ class IPC:
         self.block_part_size = config.block_part_size
         self.use_connection_pool = config.use_connection_pool
         self.encryption_key = config.encryption_key if config.encryption_key else b''
-        self.max_blocks_in_chunk = config.streaming_max_blocks_in_chunk
+        self.max_blocks_in_chunk = 32  # default upload chunk size in blocks
         self.chunk_buffer = config.chunk_buffer
         self.http_client = http_client
         self.batch_size = batch_size

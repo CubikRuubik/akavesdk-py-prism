@@ -87,7 +87,6 @@ class FileUpload:
     """Contains single file meta information."""
     bucket_name: str
     name: str
-    stream_id: str
     created_at: TimestampType
     data_blocks: int = 0
     total_blocks: int = 0
@@ -96,7 +95,6 @@ class FileUpload:
 @dataclass
 class FileChunkUpload:
     """Contains single file chunk meta information."""
-    stream_id: str
     index: int
     chunk_cid: CIDType
     raw_data_size: int  # uint64 in Go
@@ -107,7 +105,6 @@ class FileChunkUpload:
 @dataclass
 class FileDownload:
     """Contains single file meta information."""
-    stream_id: str
     bucket_name: str
     name: str
     chunks: List[Chunk]
@@ -128,7 +125,6 @@ class FileChunkDownload:
 @dataclass
 class FileMeta:
     """Contains single file meta information."""
-    stream_id: str
     root_cid: str
     bucket_name: str
     name: str
