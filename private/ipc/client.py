@@ -239,3 +239,40 @@ class Client:
                 continue
             except Exception as e:
                 raise TransactionFailedError(f"Error checking transaction receipt: {e}")
+
+    def get_tx_receipts(self, tx_hashes: List[Union[str, bytes]], timeout: float = 120.0) -> List[dict]:
+        """Fetch multiple transaction receipts in a single batched call.
+
+        This reduces round-trips when confirming multiple on-chain operations,
+        aligning with the batch receipt method added in Go SDK v0.3.0.
+
+        Args:
+            tx_hashes: List of transaction hashes (hex strings or raw bytes).
+            timeout: Per-transaction wait timeout in seconds.
+
+        Returns:
+            List of receipt dicts in the same order as ``tx_hashes``.
+        """
+        results: List[dict] = [None] * len(tx_hashes)  # type: ignore[list-item]
+        errors: List[Optional[Exception]] = [None] * len(tx_hashes)
+
+        def _fetch(idx: int, tx_hash: Union[str, bytes]) -> None:
+            try:
+                results[idx] = self.wait_for_tx(tx_hash, timeout=timeout)
+            except Exception as exc:
+                errors[idx] = exc
+
+        threads = [
+            threading.Thread(target=_fetch, args=(i, h), daemon=True)
+            for i, h in enumerate(tx_hashes)
+        ]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        first_error = next((e for e in errors if e is not None), None)
+        if first_error is not None:
+            raise first_error
+
+        return results

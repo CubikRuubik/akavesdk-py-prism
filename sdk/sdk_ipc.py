@@ -797,14 +797,13 @@ class IPC:
 
     def create_chunk_upload(self, ctx, index: int, file_encryption_key: bytes, data: bytes, bucket_id: bytes, file_name: str) -> IPCFileChunkUploadV2:
         try:
-            if len(file_encryption_key) > 0:
-                data = encrypt(file_encryption_key, data, str(index).encode())
-            
             size = len(data)
             
             block_size = BlockSize
             
-            chunk_dag = build_dag(ctx, io.BytesIO(data), block_size)
+            # Pass the encryption key to build_dag so that encryption is applied
+            # per block (aligned with the Go SDK's BuildDAG signature change in v0.3.0).
+            chunk_dag = build_dag(ctx, io.BytesIO(data), block_size, file_encryption_key)
             if chunk_dag is None:
                 raise SDKError("build_dag returned None")
             
@@ -997,7 +996,91 @@ class IPC:
         except Exception as err:
             block_cid = block.cid if hasattr(block, 'cid') else block["cid"]
             raise SDKError(f"failed to upload block {block_cid}: {str(err)}")
-    
+
+    def _upload_block_unary(self, ctx, pool: ConnectionPool, block_index: int, block, proto_chunk, bucket_id, file_name: str) -> None:
+        """Upload a single file block using the non-streaming (unary) RPC endpoint.
+
+        This is an alternative to the streaming ``_upload_block`` method.  It
+        sends the entire block as a single ``IPCFileBlockData`` message via the
+        ``FileUploadBlockUnary`` RPC, which was added in Go SDK v0.3.0.
+        """
+        try:
+            node_address = block.node_address if hasattr(block, 'node_address') else block["node_address"]
+            block_data_bytes = block.data if hasattr(block, 'data') else block["data"]
+            block_cid = block.cid if hasattr(block, 'cid') else block["cid"]
+            node_id = block.node_id if hasattr(block, 'node_id') else block["node_id"]
+
+            if isinstance(block_data_bytes, memoryview):
+                block_data_bytes = bytes(block_data_bytes)
+
+            if not node_address or not node_address.strip():
+                raise SDKError(f"Invalid node address for block {block_cid}: '{node_address}'")
+
+            logging.debug(f"Uploading block (unary) {block_index}: CID={block_cid}, node={node_address}")
+
+            result = pool.create_ipc_client(node_address, self.use_connection_pool)
+            if len(result) == 3:
+                client, closer, err = result
+                if err:
+                    raise SDKError(f"failed to create client: {str(err)}")
+                if client is None:
+                    raise SDKError(f"failed to create client: client is None")
+            else:
+                raise SDKError(f"Unexpected return format from create_ipc_client: {result}")
+
+            try:
+                import random
+                nonce_bytes = random.randbytes(32)
+                nonce = int.from_bytes(nonce_bytes, byteorder='big')
+                deadline = int(time.time() + 24 * 60 * 60)
+
+                try:
+                    import base58
+                    if node_id.startswith('12D3'):
+                        full_node_id = base58.b58decode(node_id)
+                    else:
+                        full_node_id = node_id.encode() if isinstance(node_id, str) else node_id
+                except ImportError:
+                    full_node_id = node_id.encode() if isinstance(node_id, str) else node_id
+
+                signature_hex, _ = self._create_storage_signature(
+                    proto_chunk.cid, block_cid, proto_chunk.index,
+                    block_index, node_id, nonce, deadline, bucket_id
+                )
+
+                if len(block_data_bytes) == 0:
+                    return
+
+                request = ipcnodeapi_pb2.IPCFileBlockData(
+                    data=block_data_bytes,
+                    cid=block_cid,
+                    index=block_index,
+                    chunk=proto_chunk,
+                    bucket_id=bucket_id,
+                    file_name=file_name,
+                    signature=signature_hex,
+                    nonce=nonce_bytes,
+                    node_id=full_node_id,
+                    deadline=deadline
+                )
+
+                try:
+                    client.FileUploadBlockUnary(request)
+                except Exception as e:
+                    if "BlockAlreadyFilled" in str(e):
+                        return
+                    raise SDKError(f"unary upload failed: {str(e)}")
+            finally:
+                if closer:
+                    try:
+                        closer()
+                    except Exception as e:
+                        logging.warning(f"Failed to close connection for block {block_cid}: {e}")
+
+        except Exception as err:
+            block_cid = block.cid if hasattr(block, 'cid') else block["cid"]
+            raise SDKError(f"failed to upload block (unary) {block_cid}: {str(err)}")
+
     def _create_storage_signature(self, chunk_cid: str, block_cid: str, chunk_index: int, 
                                  block_index: int, node_id: str, nonce: int, deadline: int, bucket_id: bytes) -> tuple:
         try:
@@ -1356,17 +1439,20 @@ class IPC:
                 for future in concurrent.futures.as_completed(futures):
                     index = futures[future]
                     try:
-                        data = future.result()
+                        raw = future.result()
                         from .dag import extract_block_data
-                        blocks[index] = extract_block_data(chunk_download.blocks[index].cid, data)
+                        block_data = extract_block_data(chunk_download.blocks[index].cid, raw)
+                        # Decrypt per block when encryption is enabled (aligned with the
+                        # Go SDK v0.3.0 change that moved encryption into BuildDAG at the
+                        # block level, using the block's 0-based index as HKDF info).
+                        if file_encryption_key:
+                            from private.encryption import decrypt
+                            block_data = decrypt(file_encryption_key, block_data, str(index).encode())
+                        blocks[index] = block_data
                     except Exception as e:
                         raise SDKError(f"failed to download block: {str(e)}")
             
             data = b"".join([b for b in blocks if b is not None])
-            
-            if file_encryption_key:
-                from private.encryption import decrypt
-                data = decrypt(file_encryption_key, data, str(chunk_download.index).encode())
             
             writer.write(data)
             
