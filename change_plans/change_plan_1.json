@@ -1,0 +1,196 @@
+{
+  "meta": {
+    "source_repo": "akavesdk (Go)",
+    "target_repo": "CubikRuubik/akavesdk-py-prism",
+    "base_tag": "v0.4.0",
+    "target_tag": "v0.4.4",
+    "created_at": "2026-04-30T10:17:29Z",
+    "description": "Sync akave SDK Go reference implementation from tag v0.4.4: validates Python SDK alignment with new storage batch methods, new error types, and IPC client simplifications."
+  },
+  "execution_order": [
+    "CHANGE-1: Verify and confirm alignment of new storage contract functions (fill_chunk_blocks, is_file_filled_v2, get_buckets_by_ids, get_buckets_by_ids_with_files, file_fill_counter, file_reward_claimed) — these should already be present",
+    "CHANGE-2: Verify and confirm alignment of new error entries (NotSignedByBucketOwner, NonceAlreadyUsed, OffsetOutOfBounds) and ignore_offset_error helper — these should already be present",
+    "CHANGE-3: Verify IPC client simplification — confirm DeployContracts no longer references PolicyFactory and client structure matches v0.4.4",
+    "CHANGE-4: Remove nodeapi.proto / nodeapi_pb2 / nodeapi_grpc files if still present alongside ipcnodeapi equivalents",
+    "TEST-1: Verify or add tests for fill_chunk_blocks batch method after CHANGE-1"
+  ],
+  "changes": [
+    {
+      "id": "CHANGE-1",
+      "title": "Verify new storage contract batch and query functions",
+      "priority": "high",
+      "go_files": ["private/ipc/contracts/storage.go"],
+      "target_files": [
+        "private/ipc/contracts/storage.py",
+        "sdk/sdk_ipc.py"
+      ],
+      "description": "v0.4.4 adds seven new functions to the Storage smart contract: fillChunkBlocks (batch block fill), isFileFilledV2 (alternate fill check), getBucketsByIds (batch bucket fetch by ID), getBucketsByIdsWithFiles (paginated batch bucket fetch with file lists), fileFillCounter (state variable reader), fileRewardClaimed (state variable reader), and addFileChunks (batch chunk submission). The Python SDK appears to already implement these — this change verifies correctness and completeness.",
+      "current_state": "Based on analysis, private/ipc/contracts/storage.py already contains:\n  - fill_chunk_blocks (line ~2672)\n  - is_file_filled_v2 (line ~2483)\n  - get_buckets_by_ids (line ~2549)\n  - get_buckets_by_ids_with_files (line ~2717)\n  - add_file_chunks (line ~2498)\n  - get_file_fill_counter (line ~2735)\n  - get_file_reward_claimed (line ~2738)\nAll implementations appear to be present.",
+      "required_change": "1. Confirm fill_chunk_blocks accepts a list of dicts with these exact keys (matching IStorageFillChunkBlockArgs):\n   - block_cid: bytes (bytes32)\n   - node_id: bytes (bytes32)\n   - bucket_id: bytes (bytes32)\n   - chunk_index: int (uint256)\n   - nonce: int (uint256)\n   - block_index: int (uint8)\n   - file_name: str (string)\n   - signature: bytes\n   - deadline: int (uint256)\n2. Confirm get_file_fill_counter returns an int (uint16) and get_file_reward_claimed returns a bool.\n3. Confirm add_file_chunks signature:\n   - cids: List[bytes]\n   - bucket_id: bytes\n   - file_name: str\n   - encoded_chunk_sizes: List[int] (uint256[])\n   - chunk_blocks_cids: List[List[bytes]] (bytes32[][])\n   - chunk_block_sizes: List[List[int]] (uint256[][])\n   - starting_chunk_index: int (uint256)\n4. If any signature does not match, update accordingly.",
+      "sub_changes": [
+        {
+          "id": "CHANGE-1a",
+          "title": "Confirm fill_chunk_blocks argument struct fields",
+          "priority": "high",
+          "go_files": ["private/ipc/contracts/storage.go"],
+          "target_files": ["private/ipc/contracts/storage.py"],
+          "description": "The Go IStorageFillChunkBlockArgs struct has exact field names and types that must match the ABI encoding. Verify Python implementation encodes block_index as uint8 (not uint256).",
+          "current_state": "fill_chunk_blocks exists in storage.py. Implementation details unknown beyond function existence.",
+          "required_change": "Verify that the ABI tuple encoding in fill_chunk_blocks passes block_index as uint8. The Go struct field BlockIndex is uint8, which has a different ABI selector contribution than uint256. If the Python implementation encodes it differently, correct the ABI type annotation."
+        }
+      ]
+    },
+    {
+      "id": "CHANGE-2",
+      "title": "Verify new IPC error entries and ignore_offset_error helper",
+      "priority": "high",
+      "go_files": ["private/ipc/errors.go"],
+      "target_files": ["private/ipc/errors.py"],
+      "description": "v0.4.4 adds three new contract error hashes to the error_hash_to_error mapper and introduces an ignore_offset_error helper function. The Python errors.py already appears to contain all three entries and the helper.",
+      "current_state": "private/ipc/errors.py already contains:\n  - '0x48e0ed68': 'NotSignedByBucketOwner'\n  - '0x923b8cbb': 'NonceAlreadyUsed'\n  - '0x9605a010': 'OffsetOutOfBounds'\n  - ignore_offset_error() function\nAll present and correct.",
+      "required_change": "1. Verify the three hash mappings use exactly these values:\n   '0x48e0ed68' -> 'NotSignedByBucketOwner'\n   '0x923b8cbb' -> 'NonceAlreadyUsed'\n   '0x9605a010' -> 'OffsetOutOfBounds'\n2. Verify ignore_offset_error(error) returns None when the mapped error name is 'OffsetOutOfBounds', otherwise returns the original error. The Go function is:\n   func IgnoreOffsetError(err error) error {\n     err = ErrorHashToError(err)\n     if err != nil && errors.Is(err, ErrOffsetOutOfBounds) { return nil }\n     return err\n   }\n3. No changes required if current implementation matches.",
+      "code_snippet_before": "# existing error_map in errors.py should already contain these entries",
+      "code_snippet_after": "# confirmed entries:\n\"0x48e0ed68\": \"NotSignedByBucketOwner\",\n\"0x923b8cbb\": \"NonceAlreadyUsed\",\n\"0x9605a010\": \"OffsetOutOfBounds\","
+    },
+    {
+      "id": "CHANGE-3",
+      "title": "Verify IPC client simplification — no PolicyFactory dependency",
+      "priority": "medium",
+      "go_files": ["private/ipc/client.go"],
+      "target_files": ["private/ipc/client.py"],
+      "description": "The Go IPC client's DeployContracts function was simplified in v0.4.4: it no longer deploys or references a PolicyFactory contract. The PolicyFactory (which created ListPolicy contracts on demand) was removed. ListPolicy itself still exists and can still be deployed individually. The Python client.py should not reference a PolicyFactory deployment step.",
+      "current_state": "private/ipc/client.py exists. Based on grep results, it references list_policy_abi (optional parameter) but likely does NOT have a policy_factory.py equivalent to match the removed Go policy_factory.go.",
+      "required_change": "1. Confirm that private/ipc/client.py does NOT call any deploy_policy_factory or create a PolicyFactory contract instance.\n2. Confirm that the deploy_contracts function (if present) only deploys: AkaveToken, Storage (impl + ERC1967 proxy), and AccessManager.\n3. If there is any PolicyFactory deployment logic, remove it.\n4. Deploying individual ListPolicy contracts (via deploy_list_policy in list_policy.py) is still valid and should remain.",
+      "code_snippet_before": "# any policy_factory import or deployment call should be removed",
+      "code_snippet_after": "# deploy_contracts should only: deploy AkaveToken, deploy Storage impl + proxy, deploy AccessManager"
+    },
+    {
+      "id": "CHANGE-4",
+      "title": "Remove legacy nodeapi proto files if present",
+      "priority": "low",
+      "go_files": ["private/pb/nodeapi.proto", "private/pb/nodeapi.pb.go", "private/pb/nodeapi_grpc.pb.go"],
+      "target_files": ["private/pb/"],
+      "description": "In v0.4.4 the Go SDK removed the old nodeapi.* proto files (nodeapi.proto, nodeapi.pb.go, nodeapi_grpc.pb.go), leaving only the ipcnodeapi.* variants. The Python private/pb/ directory already contains ipcnodeapi.proto, ipcnodeapi_pb2.py, and ipcnodeapi_pb2_grpc.py. If any nodeapi.* files still exist, they should be removed.",
+      "current_state": "private/pb/ contains: __init__.py, ipcnodeapi.proto, ipcnodeapi_pb2.py, ipcnodeapi_pb2_grpc.py. No nodeapi.* files are expected to be present based on directory listing.",
+      "required_change": "Check for and remove any of these files if present:\n  - private/pb/nodeapi.proto\n  - private/pb/nodeapi_pb2.py\n  - private/pb/nodeapi_grpc.py\n  - private/pb/nodeapi_pb2_grpc.py\nIf none exist, no action needed."
+    }
+  ],
+  "contract_updates": [
+    {
+      "contract": "Storage",
+      "abi_file": "private/ipc/contracts/storage.py (ABI embedded in class or loaded from JSON)",
+      "added_functions": [
+        {
+          "name": "fileFillCounter",
+          "inputs": [{"name": "", "type": "bytes32"}],
+          "outputs": [{"name": "", "type": "uint16"}],
+          "selector": "0xf8a3e41a"
+        },
+        {
+          "name": "fileRewardClaimed",
+          "inputs": [{"name": "", "type": "bytes32"}],
+          "outputs": [{"name": "", "type": "bool"}],
+          "selector": "0x018c1e9c"
+        },
+        {
+          "name": "isFileFilledV2",
+          "inputs": [{"name": "fileId", "type": "bytes32"}],
+          "outputs": [{"name": "", "type": "bool"}],
+          "selector": "0xfd21c284"
+        },
+        {
+          "name": "getBucketsByIds",
+          "inputs": [{"name": "ids", "type": "bytes32[]"}],
+          "outputs": [{"name": "", "type": "tuple[]"}],
+          "selector": "0x35bdb711"
+        },
+        {
+          "name": "getBucketsByIdsWithFiles",
+          "inputs": [
+            {"name": "ids", "type": "bytes32[]"},
+            {"name": "bucketOffset", "type": "uint256"},
+            {"name": "bucketLimit", "type": "uint256"},
+            {"name": "fileOffset", "type": "uint256"},
+            {"name": "fileLimit", "type": "uint256"}
+          ],
+          "outputs": [{"name": "buckets", "type": "tuple[]"}],
+          "selector": "0x62838c23"
+        },
+        {
+          "name": "fillChunkBlocks",
+          "inputs": [
+            {
+              "name": "args",
+              "type": "tuple[]",
+              "components": [
+                {"name": "blockCID", "type": "bytes32"},
+                {"name": "nodeId", "type": "bytes32"},
+                {"name": "bucketId", "type": "bytes32"},
+                {"name": "chunkIndex", "type": "uint256"},
+                {"name": "nonce", "type": "uint256"},
+                {"name": "blockIndex", "type": "uint8"},
+                {"name": "fileName", "type": "string"},
+                {"name": "signature", "type": "bytes"},
+                {"name": "deadline", "type": "uint256"}
+              ]
+            }
+          ],
+          "outputs": [],
+          "selector": "0x308c3cf2"
+        },
+        {
+          "name": "addFileChunks",
+          "inputs": [
+            {"name": "cids", "type": "bytes[]"},
+            {"name": "bucketId", "type": "bytes32"},
+            {"name": "fileName", "type": "string"},
+            {"name": "encodedChunkSizes", "type": "uint256[]"},
+            {"name": "chunkBlocksCIDs", "type": "bytes32[][]"},
+            {"name": "chunkBlockSizes", "type": "uint256[][]"},
+            {"name": "startingChunkIndex", "type": "uint256"}
+          ],
+          "outputs": [],
+          "selector": "0x51dc0c23"
+        }
+      ],
+      "removed_functions": [],
+      "modified_functions": [],
+      "encoding_notes": "fillChunkBlocks: the blockIndex tuple field is uint8, not uint256. Incorrect encoding will produce a different function selector. The tuple components order must match exactly: blockCID, nodeId, bucketId, chunkIndex, nonce, blockIndex, fileName, signature, deadline."
+    },
+    {
+      "contract": "PolicyFactory",
+      "abi_file": "N/A — no policy_factory.py exists in Python repo",
+      "added_functions": [],
+      "removed_functions": [
+        {
+          "name": "PolicyFactory (entire contract removed from Go)",
+          "inputs": [],
+          "outputs": [],
+          "selector": "N/A"
+        }
+      ],
+      "modified_functions": [],
+      "encoding_notes": "PolicyFactory was removed from Go SDK. Python repo does not have a PolicyFactory equivalent. The individual ListPolicy contract (list_policy.py) is retained and remains valid."
+    }
+  ],
+  "test_updates": [
+    {
+      "id": "TEST-1",
+      "go_test_function": "TestIPC_FillChunkBlocks",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Verifies that fill_chunk_blocks successfully fills multiple blocks in a single transaction and that each block is marked filled afterward.",
+      "port_instructions": "1. In tests/ipc_test.py (or similar), set up a connection to a local test node.\n2. Create a bucket and file, obtain file_id and chunk metadata.\n3. Build a list of dicts for fill_chunk_blocks, each dict with keys: block_cid (bytes), node_id (bytes), bucket_id (bytes), chunk_index (int), nonce (int), block_index (int), file_name (str), signature (bytes), deadline (int).\n4. Call storage_contract.fill_chunk_blocks(from_address, private_key, fill_args_list).\n5. Assert the returned transaction hash is valid and receipt shows success.\n6. Call is_block_filled for each block and assert True.",
+      "dependencies": ["CHANGE-1a"]
+    },
+    {
+      "id": "TEST-2",
+      "go_test_function": "TestIPC_GetBucketsByIds",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Verifies that get_buckets_by_ids returns correct bucket data for a list of bucket IDs.",
+      "port_instructions": "1. Create 2+ buckets using create_bucket.\n2. Retrieve their IDs.\n3. Call storage_contract.get_buckets_by_ids([id1, id2, ...]).\n4. Assert the returned list contains the correct bucket names and IDs.\n5. Also test get_buckets_by_ids_with_files with pagination parameters (bucket_offset=0, bucket_limit=10, file_offset=0, file_limit=10).",
+      "dependencies": ["CHANGE-1"]
+    }
+  ]
+}
