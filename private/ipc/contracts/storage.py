@@ -240,6 +240,31 @@ class StorageContract:
                 "type": "error"
             },
             {
+                "inputs": [],
+                "name": "NoPeersForCID",
+                "type": "error"
+            },
+            {
+                "inputs": [],
+                "name": "NotEligibleToUpgrade",
+                "type": "error"
+            },
+            {
+                "inputs": [],
+                "name": "TooManyBlockCIDs",
+                "type": "error"
+            },
+            {
+                "inputs": [],
+                "name": "WrongAuthority",
+                "type": "error"
+            },
+            {
+                "inputs": [],
+                "name": "InvalidPeerIndex",
+                "type": "error"
+            },
+            {
                 "anonymous": False,
                 "inputs": [
                     {
@@ -1563,51 +1588,36 @@ class StorageContract:
             {
                 "inputs": [
                     {
+                        "internalType": "string",
+                        "name": "bucketName",
+                        "type": "string"
+                    },
+                    {
+                        "internalType": "string",
+                        "name": "fileName",
+                        "type": "string"
+                    },
+                    {
+                        "internalType": "bytes",
+                        "name": "chunkCID",
+                        "type": "bytes"
+                    },
+                    {
                         "components": [
                             {
-                                "internalType": "bytes32",
-                                "name": "blockCID",
-                                "type": "bytes32"
+                                "internalType": "uint8",
+                                "name": "blockIndex",
+                                "type": "uint8"
+                            },
+                            {
+                                "internalType": "bytes",
+                                "name": "cid",
+                                "type": "bytes"
                             },
                             {
                                 "internalType": "bytes32",
                                 "name": "nodeId",
                                 "type": "bytes32"
-                            },
-                            {
-                                "internalType": "bytes32",
-                                "name": "bucketId",
-                                "type": "bytes32"
-                            },
-                            {
-                                "internalType": "uint256",
-                                "name": "chunkIndex",
-                                "type": "uint256"
-                            },
-                            {
-                                "internalType": "uint256",
-                                "name": "nonce",
-                                "type": "uint256"
-                            },
-                            {
-                                "internalType": "uint256",
-                                "name": "blockIndex",
-                                "type": "uint256"
-                            },
-                            {
-                                "internalType": "string",
-                                "name": "fileName",
-                                "type": "string"
-                            },
-                            {
-                                "internalType": "bytes",
-                                "name": "signature",
-                                "type": "bytes"
-                            },
-                            {
-                                "internalType": "uint256",
-                                "name": "deadline",
-                                "type": "uint256"
                             }
                         ],
                         "internalType": "struct IStorage.FillChunkBlockArgs[]",
@@ -1807,6 +1817,47 @@ class StorageContract:
                         ],
                         "internalType": "struct IStorage.Bucket[]",
                         "name": "buckets",
+                        "type": "tuple[]"
+                    }
+                ],
+                "stateMutability": "view",
+                "type": "function"
+            },
+            {
+                "inputs": [
+                    {
+                        "internalType": "string",
+                        "name": "bucketName",
+                        "type": "string"
+                    },
+                    {
+                        "internalType": "string",
+                        "name": "fileName",
+                        "type": "string"
+                    },
+                    {
+                        "internalType": "bytes",
+                        "name": "chunkCID",
+                        "type": "bytes"
+                    }
+                ],
+                "name": "getBlockPeersOfChunk",
+                "outputs": [
+                    {
+                        "components": [
+                            {
+                                "internalType": "bytes",
+                                "name": "cid",
+                                "type": "bytes"
+                            },
+                            {
+                                "internalType": "bytes32",
+                                "name": "nodeId",
+                                "type": "bytes32"
+                            }
+                        ],
+                        "internalType": "struct IStorage.BlockPeer[]",
+                        "name": "peers",
                         "type": "tuple[]"
                     }
                 ],
@@ -2669,43 +2720,35 @@ class StorageContract:
         
         return tx_hash.hex()
 
-    def fill_chunk_blocks(self, from_address: HexAddress, private_key: str, fill_args_list: List[dict], nonce_manager=None) -> HexStr:
+    def fill_chunk_blocks(self, from_address: HexAddress, private_key: str, bucket_name: str, file_name: str,
+                          chunk_cid: bytes, fill_args_list: List[dict], nonce_manager=None) -> HexStr:
         tx_params = {
             'from': from_address,
-            'gas': 2000000,  
+            'gas': 2000000,
             'gasPrice': self.web3.eth.gas_price,
             'nonce': nonce_manager.get_nonce() if nonce_manager else self.web3.eth.get_transaction_count(from_address)
         }
-        
-        args_tuples = []
-        for fill_args in fill_args_list:
-            args_tuple = (
-                fill_args['blockCID'],
-                fill_args['nodeId'],
-                fill_args['bucketId'], 
-                fill_args['chunkIndex'],
-                fill_args['nonce'],
-                fill_args['blockIndex'],
-                fill_args['fileName'],
-                fill_args['signature'],
-                fill_args['deadline']
-            )
-            args_tuples.append(args_tuple)
-        
-        tx = self.contract.functions.fillChunkBlocks(args_tuples).build_transaction(tx_params)
+
+        # blockIndex must be uint8 (0–255)
+        args_tuples = [
+            (int(fill_args['blockIndex']) & 0xFF, fill_args['cid'], fill_args['nodeId'])
+            for fill_args in fill_args_list
+        ]
+
+        tx = self.contract.functions.fillChunkBlocks(bucket_name, file_name, chunk_cid, args_tuples).build_transaction(tx_params)
         signed_tx = Account.sign_transaction(tx, private_key)
-        
+
         try:
             tx_hash = self.web3.eth.send_raw_transaction(get_raw_transaction(signed_tx))
         except Exception as e:
             if nonce_manager and "nonce too low" in str(e):
                 nonce_manager.reset_nonce()
             raise
-        
+
         receipt = self.web3.eth.wait_for_transaction_receipt(tx_hash)
         if receipt.status != 1:
             raise Exception(f"Transaction failed. Receipt: {receipt}")
-        
+
         return tx_hash.hex()
 
     def get_chunk_by_index(self, file_id: bytes, index: int) -> Tuple[bytes, int]:
@@ -2796,3 +2839,7 @@ class StorageContract:
             raise Exception(f"Transaction failed. Receipt: {receipt}")
         
         return tx_hash.hex()
+
+
+    def get_block_peers_of_chunk(self, bucket_name: str, file_name: str, chunk_cid: bytes) -> List[dict]:
+        return self.contract.functions.getBlockPeersOfChunk(bucket_name, file_name, chunk_cid).call()
