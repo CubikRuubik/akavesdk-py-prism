@@ -1,4 +1,5 @@
 import asyncio
+import random
 import time
 import threading
 from typing import Optional, Union
@@ -166,3 +167,27 @@ def wait_for_tx(
             continue
         except Exception as e:
             raise IPCTestError(f"Error checking transaction receipt: {e}")
+
+
+def bytes_d(seed: int, size: int) -> bytes:
+    """Return a deterministic byte sequence of the given size seeded by seed."""
+    rng = random.Random(seed)
+    return bytes(rng.randint(0, 255) for _ in range(size))
+
+
+def deterministic_cid(seed: int) -> str:
+    """Generate a CIDv1 DagProtobuf CID from deterministic 32-byte data."""
+    from multiformats import CID
+    import multihash
+    data = bytes_d(seed, 32)
+    mh = multihash.digest(data, "sha2-256")
+    cid = CID("base32", 1, "dag-pb", mh)
+    return str(cid)
+
+
+def cid_stripped_prefix(cid_str: str) -> bytes:
+    """Decode a CID and return bytes 4..36 (strip first 4 bytes of binary encoding)."""
+    from multiformats import CID
+    cid = CID.decode(cid_str)
+    cid_bytes = bytes(cid)
+    return cid_bytes[4:36]

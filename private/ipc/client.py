@@ -44,12 +44,10 @@ class BlockInfo:
 class Client:    
     def __init__(self, web3: Web3, auth: LocalAccount, storage: StorageContract, 
                  access_manager: Optional[AccessManagerContract] = None,
-                 list_policy_abi: Optional[dict] = None,
                  addresses: Optional[ContractsAddresses] = None,
                  chain_id: Optional[int] = None):
         self.storage = storage
         self.access_manager = access_manager
-        self.list_policy_abi = list_policy_abi
         self.auth = auth
         self.eth = web3
         self.addresses = addresses or ContractsAddresses()
@@ -85,13 +83,6 @@ class Client:
         if config.access_contract_address:
             access_manager = AccessManagerContract(client, config.access_contract_address)
         
-        list_policy_abi = None
-        try:
-            from .contracts import ListPolicyMetaData
-            list_policy_abi = ListPolicyMetaData.ABI
-        except ImportError:
-            pass  
-        
         addresses = ContractsAddresses(
             storage=config.storage_contract_address,
             access_manager=config.access_contract_address
@@ -102,7 +93,6 @@ class Client:
             auth=account,
             storage=storage, 
             access_manager=access_manager,
-            list_policy_abi=list_policy_abi,
             addresses=addresses,
             chain_id=chain_id
         )
@@ -132,8 +122,8 @@ class Client:
         
         try:
             from .contracts import (
-                deploy_erc1967_proxy, deploy_access_manager, deploy_list_policy, 
-                StorageContract, AccessManagerContract, ListPolicyMetaData
+                deploy_erc1967_proxy, deploy_access_manager,
+                StorageContract, AccessManagerContract
             )
             
             try:
@@ -176,11 +166,6 @@ class Client:
             
             tx_hash = storage.set_access_manager(account, access_addr)
             client.wait_for_tx(tx_hash)
-            
-            base_list_policy_addr, tx_hash, _ = deploy_list_policy(eth_client, account)
-            client.wait_for_tx(tx_hash)
-            
-            client.list_policy_abi = ListPolicyMetaData.ABI
             
             return client
             
