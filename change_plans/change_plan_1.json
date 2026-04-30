@@ -1,0 +1,92 @@
+{
+  "meta": {
+    "source_repo": "akavesdk (Go)",
+    "target_repo": "CubikRuubik/akavesdk-py-prism",
+    "base_tag": "v0.4.0",
+    "target_tag": "v0.4.4 (commit 8b66e30659c79ae8e763744bc50ae0a0540cf899)",
+    "created_at": "2026-04-30T13:56:04Z",
+    "description": "Sync from akave Go SDK tag v0.4.4: remove PolicyFactory contract, update IPC client deployment, add new error codes, update testrand utilities"
+  },
+  "execution_order": [
+    "CHANGE-1: Remove list_policy_abi from IPC Client — must be applied first as later changes depend on the cleaned-up constructor",
+    "CHANGE-2: Remove ListPolicy deployment from deploy_contracts — apply after CHANGE-1 to complete the factory removal",
+    "CHANGE-3: Add missing error hash mappings to error_hash_to_error — standalone, apply after CHANGE-1 to match Go v0.4.4 error.go state",
+    "CHANGE-4: Add deterministic test helper functions to testrand utilities — standalone, add to test infrastructure last"
+  ],
+  "changes": [
+    {
+      "id": "CHANGE-1",
+      "title": "Remove list_policy_abi from IPC Client class",
+      "priority": "high",
+      "go_files": ["private/ipc/client.go", "private/ipc/contracts/policy_factory.go"],
+      "target_files": ["private/ipc/client.py"],
+      "description": "Go's private/ipc/contracts/policy_factory.go was entirely removed in v0.4.4 (the contract that deployed ListPolicy instances). The IPC Client in Go no longer stores or manages a list_policy_abi reference. The Python Client class still carries list_policy_abi in its constructor and dial() method, which must be removed to stay in sync.",
+      "current_state": "The Python Client.__init__ signature is: def __init__(self, web3, auth, storage, access_manager=None, list_policy_abi=None, addresses=None, chain_id=None). It stores self.list_policy_abi = list_policy_abi. The dial() classmethod sets list_policy_abi = ListPolicyMetaData.ABI and passes it to the constructor.",
+      "required_change": "1. Remove the list_policy_abi parameter from Client.__init__: change the signature from (self, web3, auth, storage, access_manager=None, list_policy_abi=None, addresses=None, chain_id=None) to (self, web3, auth, storage, access_manager=None, addresses=None, chain_id=None). 2. Remove the line 'self.list_policy_abi = list_policy_abi' from __init__. 3. In the dial() classmethod, remove the try/except block that imports ListPolicyMetaData and sets list_policy_abi. 4. In the dial() classmethod, remove list_policy_abi=list_policy_abi from the cls(...) constructor call. 5. Remove the line 'client.list_policy_abi = ListPolicyMetaData.ABI' if it appears in any deploy_contracts or test helper methods. The list_policy contract bindings (list_policy.py, ListPolicyContract) can remain in the codebase for testing purposes (Go still has TestDeployListPolicy helper); only the automatic loading into Client must be removed.",
+      "code_snippet_before": "def __init__(self, web3: Web3, auth: LocalAccount, storage: StorageContract,\n             access_manager: Optional[AccessManagerContract] = None,\n             list_policy_abi: Optional[dict] = None,\n             addresses: Optional[ContractsAddresses] = None,\n             chain_id: Optional[int] = None):\n    self.storage = storage\n    self.access_manager = access_manager\n    self.list_policy_abi = list_policy_abi\n    ...",
+      "code_snippet_after": "def __init__(self, web3: Web3, auth: LocalAccount, storage: StorageContract,\n             access_manager: Optional[AccessManagerContract] = None,\n             addresses: Optional[ContractsAddresses] = None,\n             chain_id: Optional[int] = None):\n    self.storage = storage\n    self.access_manager = access_manager\n    ..."
+    },
+    {
+      "id": "CHANGE-2",
+      "title": "Remove ListPolicy deployment from deploy_contracts classmethod",
+      "priority": "high",
+      "go_files": ["private/ipc/client.go"],
+      "target_files": ["private/ipc/client.py"],
+      "description": "In Go v0.4.4 the DeployContracts function deploys: AkaveToken → Storage impl → ERC1967Proxy (Storage) → grants minter role → AccessManager → SetAccessManager. It no longer deploys a ListPolicy or PolicyFactory. The Python deploy_contracts still calls deploy_list_policy() and sets self.list_policy_abi.",
+      "current_state": "Python deploy_contracts calls deploy_list_policy(eth_client, account) near the end, waits for the transaction, and then sets client.list_policy_abi = ListPolicyMetaData.ABI.",
+      "required_change": "In the deploy_contracts classmethod: 1. Remove the call to deploy_list_policy(eth_client, account) and its associated client.wait_for_tx(tx_hash). 2. Remove the line client.list_policy_abi = ListPolicyMetaData.ABI. 3. Remove 'deploy_list_policy' from the import list inside the try block (the imports line that reads 'from .contracts import (deploy_erc1967_proxy, deploy_access_manager, deploy_list_policy, StorageContract, AccessManagerContract, ListPolicyMetaData)'). Keep deploy_erc1967_proxy, deploy_access_manager, StorageContract, AccessManagerContract. Remove deploy_list_policy and ListPolicyMetaData from that import. The resulting deploy_contracts should end after the storage.set_access_manager call followed by return client.",
+      "code_snippet_before": "            access_addr, tx_hash, access_manager = deploy_access_manager(eth_client, account, storage_proxy_addr)\n            client.wait_for_tx(tx_hash)\n            client.access_manager = access_manager\n            client.addresses.access_manager = access_addr\n            tx_hash = storage.set_access_manager(account, access_addr)\n            client.wait_for_tx(tx_hash)\n            base_list_policy_addr, tx_hash, _ = deploy_list_policy(eth_client, account)\n            client.wait_for_tx(tx_hash)\n            client.list_policy_abi = ListPolicyMetaData.ABI\n            return client",
+      "code_snippet_after": "            access_addr, tx_hash, access_manager = deploy_access_manager(eth_client, account, storage_proxy_addr)\n            client.wait_for_tx(tx_hash)\n            client.access_manager = access_manager\n            client.addresses.access_manager = access_addr\n            tx_hash = storage.set_access_manager(account, access_addr)\n            client.wait_for_tx(tx_hash)\n            return client"
+    },
+    {
+      "id": "CHANGE-3",
+      "title": "Verify and update error hash mappings in errors.py",
+      "priority": "medium",
+      "go_files": ["private/ipc/errors.go"],
+      "target_files": ["private/ipc/errors.py"],
+      "description": "Go v0.4.4 updated errors.go (+139/-46 lines) adding new error constants and hash-to-error mappings. The current Python errors.py should be verified to confirm all 47 error hash entries from Go are present with the correct hex selectors.",
+      "current_state": "Python errors.py has 47 entries in error_map dict. Go errors.go also has 47 entries. They appear to be in sync already, but this should be verified against the canonical Go list.",
+      "required_change": "Verify that private/ipc/errors.py error_map contains ALL of the following entries with exact hex selectors. If any are missing or have wrong selectors, add or correct them. The complete canonical mapping from Go v0.4.4: {'0x497ef2c2': 'BucketAlreadyExists', '0x4f4b202a': 'BucketInvalid', '0xdc64d0ad': 'BucketInvalidOwner', '0x938a92b7': 'BucketNonexists', '0x89fddc00': 'BucketNonempty', '0x6891dde0': 'FileAlreadyExists', '0x77a3cbd8': 'FileInvalid', '0x21584586': 'FileNonexists', '0xc4a3b6f1': 'FileNonempty', '0xd09ec7af': 'FileNameDuplicate', '0xd96b03b1': 'FileFullyUploaded', '0x702cf740': 'FileChunkDuplicate', '0xc1edd16a': 'BlockAlreadyExists', '0xcb20e88c': 'BlockInvalid', '0x15123121': 'BlockNonexists', '0x856b300d': 'InvalidArrayLength', '0x17ec8370': 'InvalidFileBlocksCount', '0x5660ebd2': 'InvalidLastBlockSize', '0x1b6fdfeb': 'InvalidEncodedSize', '0xfe33db92': 'InvalidFileCID', '0x37c7f255': 'IndexMismatch', '0xcefa6b05': 'NoPolicy', '0x5c371e92': 'FileNotFilled', '0xdad01942': 'BlockAlreadyFilled', '0x4b6b8ec8': 'ChunkCIDMismatch', '0x0d6b18f0': 'NotBucketOwner', '0xc4c1a0c5': 'BucketNotFound', '0x3bcbb0de': 'FileDoesNotExist', '0xa2c09fea': 'NotThePolicyOwner', '0x94289054': 'CloneArgumentsTooLong', '0x4ca249dc': 'Create2EmptyBytecode', '0xf3714a9b': 'ECDSAInvalidSignatureS', '0x367e2e27': 'ECDSAInvalidSignatureLength', '0xf645eedf': 'ECDSAInvalidSignature', '0xb73e95e1': 'AlreadyWhitelisted', '0xe6c4247b': 'InvalidAddress', '0x584a7938': 'NotWhitelisted', '0x227bc153': 'MathOverflowedMulDiv', '0xe7b199a6': 'InvalidBlocksAmount', '0x59b452ef': 'InvalidBlockIndex', '0x55cbc831': 'LastChunkDuplicate', '0x2abde339': 'FileNotExists', '0x48e0ed68': 'NotSignedByBucketOwner', '0x923b8cbb': 'NonceAlreadyUsed', '0x9605a010': 'OffsetOutOfBounds'}. Note: FileNonexists (0x21584586) is distinct from FileNotExists (0x2abde339) — both must be present.",
+      "priority": "medium"
+    },
+    {
+      "id": "CHANGE-4",
+      "title": "Add deterministic test helper functions to testrand equivalent",
+      "priority": "low",
+      "go_files": ["private/testrand/testrand.go"],
+      "target_files": ["private/ipctest/ipctest.py"],
+      "description": "Go v0.4.4 updated testrand.go adding BytesD (deterministic random bytes), DeterministicCID, CIDStrippedPrefix helpers. These helpers improve test determinism and reproducibility. Python test infrastructure should have equivalent helpers.",
+      "current_state": "Unknown — the exact state of Python test utilities is not verified against Go testrand.go v0.4.4.",
+      "required_change": "Check private/ipctest/ipctest.py (or equivalent test helper module). If not already present, add: 1. A function bytes_d(seed: int, size: int) -> bytes that uses random.Random(seed) to generate a deterministic byte sequence of the given size. 2. A function deterministic_cid(seed: int) -> str that generates a CIDv1 DagProtobuf CID from deterministic 32-byte data seeded by the given integer. 3. A function cid_stripped_prefix(cid_str: str) -> bytes that decodes a CID and returns the 32-byte array with the first 4 bytes stripped (i.e., bytes 4..36 of the CID binary encoding).",
+      "priority": "low"
+    }
+  ],
+  "contract_updates": [
+    {
+      "contract": "PolicyFactory",
+      "abi_file": "private/ipc/contracts/policy_factory.go (REMOVED)",
+      "added_functions": [],
+      "removed_functions": [
+        {
+          "name": "PolicyFactory (entire contract)",
+          "inputs": [],
+          "outputs": [],
+          "selector": "N/A"
+        }
+      ],
+      "modified_functions": [],
+      "encoding_notes": "policy_factory.go (408 lines) was completely removed from the Go SDK. The contract that created ListPolicy instances via CREATE2/clone factory pattern is gone. Errors CloneArgumentsTooLong and Create2EmptyBytecode were associated with this contract but are kept in the Go error table for backward compatibility."
+    }
+  ],
+  "test_updates": [
+    {
+      "id": "TEST-1",
+      "go_test_function": "TestContracts",
+      "go_file": "private/ipc/client_test.go",
+      "type": "integration",
+      "description": "Verifies that DeployContracts correctly deploys Storage and AccessManager without deploying a PolicyFactory/ListPolicy. The test now no longer expects a list policy to be deployed as part of contract initialization.",
+      "port_instructions": "1. In the Python equivalent integration test for contract deployment (tests/test_ipc_client.py or similar), verify that the deploy_contracts() method completes without calling deploy_list_policy. 2. Assert that the returned Client has client.storage set to a valid StorageContract, client.access_manager set to a valid AccessManagerContract, and that client.list_policy_abi does NOT exist (since it was removed). 3. If a test previously asserted client.list_policy_abi is not None, remove that assertion.",
+      "dependencies": ["CHANGE-1", "CHANGE-2"]
+    }
+  ]
+}
