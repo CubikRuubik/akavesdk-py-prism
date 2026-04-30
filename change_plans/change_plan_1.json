@@ -1,0 +1,245 @@
+{
+  "meta": {
+    "source_repo": "akavesdk (Go)",
+    "target_repo": "CubikRuubik/akavesdk-py-prism",
+    "base_tag": "v0.4.3 (parent of 8b66e30659c79ae8e763744bc50ae0a0540cf899)",
+    "target_tag": "v0.4.4 (commit 8b66e30659c79ae8e763744bc50ae0a0540cf899)",
+    "created_at": "2026-04-30T11:44:23Z",
+    "description": "Sync akavesdk from tag v0.4.4: renamed gRPC proto API, removed PolicyFactory contract, added batch contract operations, expanded error codes, updated contract deployment with upgradeable proxy pattern"
+  },
+  "execution_order": [
+    "CHANGE-1: Rename gRPC proto service from nodeapi to ipcnodeapi — apply first as all other layers depend on correct service stubs",
+    "CHANGE-2: Remove PolicyFactory contract binding and all dependent code — apply before contract updates",
+    "CHANGE-3: Add new error codes to error-hash dispatch table — apply before contract function changes",
+    "CHANGE-4: Update Storage contract: add GetBucketIndexByName, GetBucketsByIds, GetBucketsByIdsWithFiles, IsFileFilledV2, and update DeleteBucket/DeleteFile signatures — apply after error updates",
+    "CHANGE-5: Add batch contract operations AddFileChunks and FillChunkBlocks to Storage binding — apply after CHANGE-4",
+    "CHANGE-6: Update contract deployment flow to use AkaveToken + ERC1967Proxy upgradeable pattern — apply after CHANGE-5",
+    "CHANGE-7: Update upload/download logic to use batch chunk operations — apply last"
+  ],
+  "changes": [
+    {
+      "id": "CHANGE-1",
+      "title": "Rename gRPC proto service from nodeapi to ipcnodeapi",
+      "priority": "critical",
+      "go_files": [
+        "private/pb/nodeapi.pb.go (REMOVED)",
+        "private/pb/nodeapi.proto (REMOVED)",
+        "private/pb/nodeapi_grpc.pb.go (REMOVED)",
+        "private/pb/ipcnodeapi.pb.go (NEW — replaces nodeapi.pb.go)",
+        "private/pb/ipcnodeapi.proto (NEW — replaces nodeapi.proto)",
+        "private/pb/ipcnodeapi_grpc.pb.go (NEW — replaces nodeapi_grpc.pb.go)"
+      ],
+      "target_files": [
+        "akavesdk/connection.py or sdk/connection.py",
+        "private/pb/ directory if proto files are vendored"
+      ],
+      "description": "The gRPC proto service was renamed from 'nodeapi' to 'ipcnodeapi'. The old files (nodeapi.pb.go, nodeapi.proto, nodeapi_grpc.pb.go) were deleted and replaced with identically structured files named ipcnodeapi.*. The service name, package path, and RPC method signatures remain equivalent; only the file and service identifier changed.",
+      "current_state": "The Python repo has an akavesdk/connection.py and sdk/ directory. It likely uses grpc stubs generated from the proto. The current stubs may reference the old 'nodeapi' service name.",
+      "required_change": "1. Locate any Python file referencing the old proto service 'nodeapi' (e.g., import of nodeapi_pb2 or nodeapi_pb2_grpc). 2. Rename all imports to use 'ipcnodeapi_pb2' and 'ipcnodeapi_pb2_grpc'. 3. If proto files are vendored in a private/ directory, rename nodeapi.proto to ipcnodeapi.proto and update the package/service declarations. 4. Regenerate the Python gRPC stubs (using grpc_tools.protoc) from the renamed proto file. 5. Update all call sites that used the old stub class names (e.g., NodeAPIStub → IPCNodeAPIStub).",
+      "code_snippet_before": "import nodeapi_pb2\nimport nodeapi_pb2_grpc\nstub = nodeapi_pb2_grpc.NodeAPIStub(channel)",
+      "code_snippet_after": "import ipcnodeapi_pb2\nimport ipcnodeapi_pb2_grpc\nstub = ipcnodeapi_pb2_grpc.IPCNodeAPIStub(channel)"
+    },
+    {
+      "id": "CHANGE-2",
+      "title": "Remove PolicyFactory contract binding",
+      "priority": "high",
+      "go_files": [
+        "private/ipc/contracts/policy_factory.go (REMOVED, 408 lines)"
+      ],
+      "target_files": [
+        "akavesdk/blockchain/policy_factory.py or sdk/blockchain/policy_factory.py (if it exists)"
+      ],
+      "description": "The PolicyFactory Ethereum contract binding was entirely removed. Any code that deployed or interacted with a PolicyFactory contract must be removed or migrated. The ListPolicy contract still exists and is used for test deployments.",
+      "current_state": "Unknown — the Python repo may have a policy_factory.py binding or ABI wrapper.",
+      "required_change": "1. Search for any file named policy_factory.py or containing 'PolicyFactory' in the Python repo. 2. Delete or remove all PolicyFactory-related code, ABIs, and wrapper classes. 3. Do not remove ListPolicy equivalents — only remove PolicyFactory-specific code. 4. Update any __init__.py or module exports that previously exposed PolicyFactory."
+    },
+    {
+      "id": "CHANGE-3",
+      "title": "Expand error code dispatch table with new error variants",
+      "priority": "high",
+      "go_files": [
+        "private/ipc/errors.go"
+      ],
+      "target_files": [
+        "akavesdk/blockchain/errors.py or sdk/errors.py"
+      ],
+      "description": "Many new error variants were added to the error hash dispatch table in errors.go. The table maps 4-byte Solidity error selectors (as hex strings) to named error values. All entries must be present in the Python error dispatch.",
+      "current_state": "The Python repo likely has a partial error table. The new entries are those added in v0.4.4.",
+      "required_change": "Add the following entries to the Python error-hash dispatch dictionary. Each key is a 4-byte hex selector, each value is a named exception or error string:\n- '0x9605a010': ErrOffsetOutOfBounds\n- '0x923b8cbb': ErrNonceAlreadyUsed\n- '0x48e0ed68': ErrNotSignedByBucketOwner\n- '0x2abde339': ErrFileNotExists\n- '0x55cbc831': ErrLastChunkDuplicate\n- '0x59b452ef': ErrInvalidBlockIndex\n- '0xe7b199a6': ErrInvalidBlocksAmount\n- '0x227bc153': ErrMathOverflowedMulDiv\n- '0x584a7938': ErrNotWhitelisted\n- '0xe6c4247b': ErrInvalidAddress\n- '0xb73e95e1': ErrAlreadyWhitelisted\n- '0xf645eedf': ErrECDSAInvalidSignature\n- '0x367e2e27': ErrECDSAInvalidSignatureLength\n- '0xf3714a9b': ErrECDSAInvalidSignatureS\n- '0x4ca249dc': ErrCreate2EmptyBytecode\n- '0x94289054': ErrCloneArgumentsTooLong\n- '0xa2c09fea': ErrNotThePolicyOwner\n- '0x3bcbb0de': ErrFileDoesNotExist\n- '0xc4c1a0c5': ErrBucketNotFound\nThe complete confirmed error table for v0.4.4 is:\n- '0x497ef2c2': ErrBucketAlreadyExists\n- '0x4f4b202a': ErrBucketInvalid\n- '0xdc64d0ad': ErrBucketInvalidOwner\n- '0x938a92b7': ErrBucketNonexists\n- '0x89fddc00': ErrBucketNonempty\n- '0x6891dde0': ErrFileAlreadyExists\n- '0x77a3cbd8': ErrFileInvalid\n- '0x21584586': ErrFileNonexists\n- '0xc4a3b6f1': ErrFileNonempty\n- '0xd09ec7af': ErrFileNameDuplicate\n- '0xd96b03b1': ErrFileFullyUploaded\n- '0x702cf740': ErrFileChunkDuplicate\n- '0xc1edd16a': ErrBlockAlreadyExists\n- '0xcb20e88c': ErrBlockInvalid\n- '0x15123121': ErrBlockNonexists\n- '0x856b300d': ErrInvalidArrayLength\n- '0x17ec8370': ErrInvalidFileBlocksCount\n- '0x5660ebd2': ErrInvalidLastBlockSize\n- '0x1b6fdfeb': ErrInvalidEncodedSize\n- '0xfe33db92': ErrInvalidFileCID\n- '0x37c7f255': ErrIndexMismatch\n- '0xcefa6b05': ErrNoPolicy\n- '0x5c371e92': ErrFileNotFilled\n- '0xdad01942': ErrBlockAlreadyFilled\n- '0x4b6b8ec8': ErrChunkCIDMismatch\n- '0x0d6b18f0': ErrNotBucketOwner\n- '0xc4c1a0c5': ErrBucketNotFound\n- '0x3bcbb0de': ErrFileDoesNotExist\n- '0xa2c09fea': ErrNotThePolicyOwner\n- '0x94289054': ErrCloneArgumentsTooLong\n- '0x4ca249dc': ErrCreate2EmptyBytecode\n- '0xf3714a9b': ErrECDSAInvalidSignatureS\n- '0x367e2e27': ErrECDSAInvalidSignatureLength\n- '0xf645eedf': ErrECDSAInvalidSignature\n- '0xb73e95e1': ErrAlreadyWhitelisted\n- '0xe6c4247b': ErrInvalidAddress\n- '0x584a7938': ErrNotWhitelisted\n- '0x227bc153': ErrMathOverflowedMulDiv\n- '0xe7b199a6': ErrInvalidBlocksAmount\n- '0x59b452ef': ErrInvalidBlockIndex\n- '0x55cbc831': ErrLastChunkDuplicate\n- '0x2abde339': ErrFileNotExists\n- '0x48e0ed68': ErrNotSignedByBucketOwner\n- '0x923b8cbb': ErrNonceAlreadyUsed\n- '0x9605a010': ErrOffsetOutOfBounds\nAlso add a helper function ignore_offset_error(err) that swallows ErrOffsetOutOfBounds, returning None for that error and re-raising all other errors."
+    },
+    {
+      "id": "CHANGE-4",
+      "title": "Update Storage contract: new query functions and updated delete signatures",
+      "priority": "critical",
+      "go_files": [
+        "private/ipc/contracts/storage.go"
+      ],
+      "target_files": [
+        "akavesdk/blockchain/storage.py or sdk/blockchain/storage.py"
+      ],
+      "description": "Several new read-only functions were added to the Storage contract, and the signatures of delete_bucket and delete_file were updated to require an index parameter. All changes affect the ABI and must be reflected in the Python contract wrapper.",
+      "current_state": "The Python repo has a sdk/sdk_ipc.py file. The contract wrapper's exact state is unknown but likely reflects a pre-v0.4.4 ABI.",
+      "required_change": "1. Add the following new read-only (call) methods to the Storage contract wrapper:\n   a. get_bucket_index_by_name(bucket_name: str, owner: str) -> dict {'index': int, 'exists': bool}\n      ABI selector: 0x287e677f\n   b. get_buckets_by_ids(ids: list[bytes]) -> list[dict] (list of IStorageBucket dicts)\n      ABI selector: 0x35bdb711\n   c. get_buckets_by_ids_with_files(ids: list[bytes], bucket_offset: int, bucket_limit: int, file_offset: int, file_limit: int) -> list[dict]\n      ABI selector: 0x62838c23\n   d. is_file_filled_v2(bucket_id: bytes, file_name: str) -> bool\n      (check ABI for selector)\n2. Update delete_bucket method:\n   Old: delete_bucket(id: bytes, bucket_name: str) -> TxReceipt\n   New: delete_bucket(id: bytes, bucket_name: str, index: int) -> TxReceipt\n   ABI selector: 0xfd1d3c0c\n   Before calling, obtain the index via get_bucket_index_by_name(bucket_name, owner_address).\n3. Update delete_file method:\n   Old: delete_file(file_id: bytes, bucket_id: bytes, file_name: str) -> TxReceipt\n   New: delete_file(file_id: bytes, bucket_id: bytes, file_name: str, index: int) -> TxReceipt\n   ABI selector: 0xd6d3110b\n   Before calling, obtain the index via get_file_index_by_id(bucket_name, file_id, owner_address).\n4. IStorageBucket dict keys: id (bytes32), name (str), created_at (int), owner (str address), files (list of bytes32).\n5. IStorageFile dict keys: id, file_cid, bucket_id, name, encoded_size, actual_size, is_public, created_at.",
+      "code_snippet_before": "# storage.delete_bucket(bucket_id, bucket_name)\n# storage.delete_file(file_id, bucket_id, file_name)",
+      "code_snippet_after": "# index_info = storage.get_bucket_index_by_name(bucket_name, owner)\n# storage.delete_bucket(bucket_id, bucket_name, index_info['index'])\n# file_idx = storage.get_file_index_by_id(bucket_name, file_id, owner)\n# storage.delete_file(file_id, bucket_id, file_name, file_idx['index'])"
+    },
+    {
+      "id": "CHANGE-5",
+      "title": "Add batch contract operations: add_file_chunks and fill_chunk_blocks",
+      "priority": "critical",
+      "go_files": [
+        "private/ipc/contracts/storage.go",
+        "sdk/sdk_ipc.go"
+      ],
+      "target_files": [
+        "akavesdk/blockchain/storage.py",
+        "sdk/sdk_ipc.py"
+      ],
+      "description": "Two new batch transaction functions were added to the Storage contract: add_file_chunks (submit multiple chunks in one transaction) and fill_chunk_blocks (fill multiple blocks in one transaction). These replace single-item calls in the upload hot path.",
+      "current_state": "The Python repo's sdk/sdk_ipc.py likely calls add_file_chunk (single) per chunk in an upload loop.",
+      "required_change": "1. Add add_file_chunks transaction method to the Storage contract wrapper:\n   Parameters: cids (list[bytes]), bucket_id (bytes32), file_name (str), encoded_chunk_sizes (list[int]), chunk_blocks_cids (list[list[bytes32]]), chunk_block_sizes (list[list[int]]), starting_chunk_index (int)\n   ABI selector: 0x51dc0c23\n   Solidity: addFileChunks(bytes[] cids, bytes32 bucketId, string fileName, uint256[] encodedChunkSizes, bytes32[][] chunkBlocksCIDs, uint256[][] chunkBlockSizes, uint256 startingChunkIndex)\n\n2. Add fill_chunk_blocks transaction method:\n   Parameters: args (list[FillChunkBlockArgs])\n   ABI selector: 0x308c3cf2\n   Solidity: fillChunkBlocks((bytes32,bytes32,bytes32,uint256,uint256,uint8,string,bytes,uint256)[] args)\n   FillChunkBlockArgs fields (in ABI order):\n     - block_cid: bytes32\n     - node_id: bytes32\n     - bucket_id: bytes32\n     - chunk_index: int (uint256)\n     - nonce: int (uint256)\n     - block_index: int (uint8)\n     - file_name: str\n     - signature: bytes\n     - deadline: int (uint256)\n\n3. In sdk_ipc.py upload method, replace the per-chunk loop over add_file_chunk with batched logic:\n   a. Collect up to batch_size chunks into a list.\n   b. For the batch, gather all cids, encoded_chunk_sizes, chunk_blocks_cids (2D), chunk_block_sizes (2D).\n   c. Call storage.add_file_chunks(cids, bucket_id, file_name, encoded_chunk_sizes, chunk_blocks_cids, chunk_block_sizes, starting_chunk_index=first_chunk_index_in_batch).\n   d. Wait for the transaction receipt.\n\n4. The batch_size SDK config field (default 1, min 1) controls how many chunks per transaction."
+    },
+    {
+      "id": "CHANGE-6",
+      "title": "Update contract deployment to use AkaveToken and ERC1967Proxy upgradeable pattern",
+      "priority": "medium",
+      "go_files": [
+        "private/ipc/client.go",
+        "private/ipc/contracts/akave_token.go (NEW)",
+        "private/ipc/contracts/erc1967Proxy.go (NEW)"
+      ],
+      "target_files": [
+        "akavesdk/connection.py or sdk/connection.py",
+        "akavesdk/blockchain/akave_token.py (NEW)",
+        "akavesdk/blockchain/erc1967_proxy.py (NEW)"
+      ],
+      "description": "The contract deployment flow was updated to use an upgradeable proxy pattern. The Storage contract is now deployed as an implementation behind an ERC1967Proxy and initialized with an AkaveToken address. The AccessManager is deployed after the proxy.",
+      "current_state": "Unknown — Python repo may have an older deploy_contracts function without the proxy pattern.",
+      "required_change": "Update the deploy_contracts function/method to follow this sequence:\n1. Deploy AkaveToken contract (no constructor args) — store address as akave_token_addr.\n2. Deploy Storage implementation contract (no constructor args) — store as storage_impl_address.\n3. ABI-encode the call 'initialize(address akave_token_addr)' to produce init_data (bytes).\n4. Deploy ERC1967Proxy(storage_impl_address, init_data) — store as storage_proxy_address.\n5. Bind the Storage ABI to storage_proxy_address (NOT to storage_impl_address).\n6. Get minter_role = token_contract.MINTER_ROLE().\n7. Call token_contract.grant_role(minter_role, storage_proxy_address) and wait for receipt.\n8. Deploy AccessManager(storage_proxy_address) — store as access_manager_address.\n9. Call storage_contract.set_access_manager(access_manager_address) and wait for receipt.\n10. Return or store all contract references and addresses.\nThe Config/settings dict keys remain: dial_uri, private_key, storage_contract_address, access_contract_address."
+    },
+    {
+      "id": "CHANGE-7",
+      "title": "Update SDK upload logic for batch chunk operations",
+      "priority": "high",
+      "go_files": [
+        "sdk/sdk_ipc.go"
+      ],
+      "target_files": [
+        "sdk/sdk_ipc.py"
+      ],
+      "description": "The upload path was refactored to batch multiple chunks into a single blockchain transaction using add_file_chunks. New data structures ChunkData and BatchTransaction were introduced to accumulate chunk data before submitting.",
+      "current_state": "The Python repo's sdk/sdk_ipc.py likely calls a single add_file_chunk per chunk in the upload loop.",
+      "required_change": "1. Create a ChunkData dataclass/namedtuple with fields: chunk_upload, cids (list[bytes32]), sizes (list[int]).\n2. Create a BatchTransaction dataclass/namedtuple with fields: chunks (list), tx (transaction object).\n3. Refactor the upload method:\n   a. Read up to batch_size file chunks in a loop iteration.\n   b. For each chunk, compute its cids and sizes (using the to_ipc_proto_chunk equivalent).\n   c. After collecting the batch, call add_file_chunks with all batch data and starting_chunk_index = first chunk index in batch.\n   d. Put the BatchTransaction into a queue; a consumer coroutine/thread waits for the tx and processes chunks.\n4. Resumable upload: if file_upload has existing chunks, skip the reader by actual_file_size bytes (seek or discard), then continue from last chunk_count.\n5. Apply retry logic around blockchain transaction submissions.\n6. The minimum file size remains 127 bytes (minFileSize constant)."
+    }
+  ],
+  "contract_updates": [
+    {
+      "contract": "Storage",
+      "abi_file": "private/ipc/contracts/storage.go",
+      "added_functions": [
+        {
+          "name": "GetBucketIndexByName",
+          "inputs": [{"name": "bucketName", "type": "string"}, {"name": "owner", "type": "address"}],
+          "outputs": [{"name": "index", "type": "uint256"}, {"name": "exists", "type": "bool"}],
+          "selector": "0x287e677f"
+        },
+        {
+          "name": "GetBucketsByIds",
+          "inputs": [{"name": "ids", "type": "bytes32[]"}],
+          "outputs": [{"name": "", "type": "IStorageBucket[]"}],
+          "selector": "0x35bdb711"
+        },
+        {
+          "name": "GetBucketsByIdsWithFiles",
+          "inputs": [
+            {"name": "ids", "type": "bytes32[]"},
+            {"name": "bucketOffset", "type": "uint256"},
+            {"name": "bucketLimit", "type": "uint256"},
+            {"name": "fileOffset", "type": "uint256"},
+            {"name": "fileLimit", "type": "uint256"}
+          ],
+          "outputs": [{"name": "", "type": "IStorageBucket[]"}],
+          "selector": "0x62838c23"
+        },
+        {
+          "name": "AddFileChunks",
+          "inputs": [
+            {"name": "cids", "type": "bytes[]"},
+            {"name": "bucketId", "type": "bytes32"},
+            {"name": "fileName", "type": "string"},
+            {"name": "encodedChunkSizes", "type": "uint256[]"},
+            {"name": "chunkBlocksCIDs", "type": "bytes32[][]"},
+            {"name": "chunkBlockSizes", "type": "uint256[][]"},
+            {"name": "startingChunkIndex", "type": "uint256"}
+          ],
+          "outputs": [],
+          "selector": "0x51dc0c23"
+        },
+        {
+          "name": "FillChunkBlocks",
+          "inputs": [
+            {"name": "args", "type": "(bytes32,bytes32,bytes32,uint256,uint256,uint8,string,bytes,uint256)[]"}
+          ],
+          "outputs": [],
+          "selector": "0x308c3cf2"
+        },
+        {
+          "name": "IsFileFilledV2",
+          "inputs": [
+            {"name": "bucketId", "type": "bytes32"},
+            {"name": "fileName", "type": "string"}
+          ],
+          "outputs": [{"name": "", "type": "bool"}],
+          "selector": "check ABI"
+        }
+      ],
+      "removed_functions": [],
+      "modified_functions": [
+        {
+          "name": "DeleteBucket",
+          "change_description": "Added 'index' parameter (uint256) as the third argument. New Solidity: deleteBucket(bytes32 id, string bucketName, uint256 index) returns(bool). Selector: 0xfd1d3c0c. Before calling, retrieve index via get_bucket_index_by_name(bucket_name, owner)."
+        },
+        {
+          "name": "DeleteFile",
+          "change_description": "Added 'index' parameter (uint256) as the fourth argument. New Solidity: deleteFile(bytes32 fileID, bytes32 bucketId, string fileName, uint256 index) returns(bool). Selector: 0xd6d3110b. Before calling, retrieve index via get_file_index_by_id(bucket_name, file_id, owner)."
+        }
+      ],
+      "encoding_notes": "FillChunkBlockArgs encodes as a tuple in this order: (bytes32 blockCID, bytes32 nodeId, bytes32 bucketId, uint256 chunkIndex, uint256 nonce, uint8 blockIndex, string fileName, bytes signature, uint256 deadline). Note blockIndex is uint8 — ensure Python/web3.py encodes this correctly (not uint256)."
+    },
+    {
+      "contract": "PolicyFactory",
+      "abi_file": "private/ipc/contracts/policy_factory.go (REMOVED)",
+      "added_functions": [],
+      "removed_functions": [
+        {
+          "name": "PolicyFactory (entire contract)",
+          "inputs": [],
+          "outputs": [],
+          "selector": "N/A — entire contract removed"
+        }
+      ],
+      "modified_functions": [],
+      "encoding_notes": "The PolicyFactory contract is fully removed. Remove all ABI JSON, wrapper classes, and call-site code related to PolicyFactory in the Python target repo."
+    }
+  ],
+  "test_updates": [
+    {
+      "id": "TEST-1",
+      "go_test_function": "TestExternalCreateBucketCommand",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Tests the bucket create functionality with success cases, metadata encryption option, duplicate bucket error, empty name error, missing name error, and invalid private key error.",
+      "port_instructions": "1. Create an integration test in the tests/ directory.\n2. Use environment-provided node address and private key (equivalent to ipctest.PickPrivateKey and PickNodeRPCAddress).\n3. Generate a random bucket name (10 characters, alphanumeric).\n4. Test cases:\n   a. 'Create bucket successfully': call sdk.create_bucket(bucket_name), assert no error and result contains bucket name.\n   b. 'Create bucket with metadata encryption': pass metadata_encryption=True and a valid 32-byte encryption_key, assert success.\n   c. 'Create bucket already exists': call create_bucket again with same name, assert error message contains 'BucketAlreadyExists'.\n   d. 'Empty bucket name': call with name='', assert error contains bucket name validation message.\n   e. 'Invalid private key': initialize SDK with private_key='51ccv2', assert error contains 'invalid hex character' or equivalent.\n5. Import and use the updated error constants from CHANGE-3.\n6. Dependencies: CHANGE-1 (gRPC), CHANGE-3 (error codes).",
+      "dependencies": ["CHANGE-1", "CHANGE-3"]
+    },
+    {
+      "id": "TEST-2",
+      "go_test_function": "TestExternalUploadFileCommand (inferred)",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Tests file upload with batch operations, minimum file size enforcement, and resumable upload.",
+      "port_instructions": "1. Create an integration test that exercises file upload.\n2. Set up a test bucket before the test.\n3. Create a test file with content > 127 bytes (minimum file size).\n4. Test uploading with batch_size=1 (single chunk per tx) and batch_size=2 (two chunks per tx).\n5. Verify file appears in list_files after upload.\n6. Verify file content matches on download.\n7. Test resumable upload: simulate interrupted upload and resume.\n8. Dependencies: CHANGE-4, CHANGE-5, CHANGE-7.",
+      "dependencies": ["CHANGE-4", "CHANGE-5", "CHANGE-7"]
+    }
+  ]
+}
