@@ -7,6 +7,7 @@ import concurrent.futures
 import secrets
 import threading
 import queue
+from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import List, Optional, Callable, Dict, Any, Union, Tuple
 from google.protobuf.timestamp_pb2 import Timestamp
@@ -27,6 +28,23 @@ class TxWaitSignal:
     def __init__(self, FileUploadChunk, Transaction):
         self.FileUploadChunk = FileUploadChunk
         self.Transaction = Transaction
+
+
+@dataclass
+class ChunkData:
+    """Holds a prepared chunk and its block CIDs/sizes for batch submission."""
+    chunk_upload: Any
+    cids: List[bytes]
+    sizes: List[int]
+
+
+@dataclass
+class BatchTransaction:
+    """Associates a batch of chunks with their submitted transaction hash."""
+    chunks: List[ChunkData]
+    tx: Any  # transaction hash or None
+
+
 from private.encryption import encrypt, derive_key, decrypt
 from private.pb import ipcnodeapi_pb2, ipcnodeapi_pb2_grpc
 
@@ -630,44 +648,65 @@ class IPC:
             total_chunks_uploaded = 0
 
             while True:
-                chunk_data = bytearray(buffer_size)
-                bytes_read = 0
+                # Accumulate up to batch_size chunks before submitting a single transaction.
+                batch: List[ChunkData] = []
+                batch_start_index = chunk_index
 
-                while bytes_read < buffer_size:
-                    try:
-                        n = reader.readinto(memoryview(chunk_data)[bytes_read:])
-                        if n == 0 or n is None:
+                while len(batch) < self.batch_size:
+                    chunk_buf = bytearray(buffer_size)
+                    bytes_read = 0
+
+                    while bytes_read < buffer_size:
+                        try:
+                            n = reader.readinto(memoryview(chunk_buf)[bytes_read:])
+                            if n == 0 or n is None:
+                                break
+                            bytes_read += n
+                        except Exception as e:
+                            if bytes_read == 0:
+                                raise SDKError(f"failed to read from reader: {str(e)}")
                             break
-                        bytes_read += n
-                    except Exception as e:
-                        if bytes_read == 0:
-                            raise SDKError(f"failed to read from reader: {str(e)}")
-                        break
 
-                if bytes_read == 0:
-                    if chunk_index == 0:
+                    if bytes_read == 0:
+                        break  # EOF reached; stop filling this batch
+
+                    chunk_upload = self.create_chunk_upload(ctx, chunk_index, file_enc_key,
+                                                          chunk_buf[:bytes_read], bucket_id,
+                                                          encrypted_file_name)
+
+                    cids, sizes, proto_chunk, error = to_ipc_proto_chunk(
+                        chunk_upload.chunk_cid, chunk_upload.index, chunk_upload.actual_size,
+                        chunk_upload.blocks)
+                    if error:
+                        raise error
+
+                    batch.append(ChunkData(chunk_upload=chunk_upload, cids=cids, sizes=sizes))
+                    chunk_index += 1
+
+                if not batch:
+                    if total_chunks_uploaded == 0 and batch_start_index == 0:
                         raise SDKError("empty file")
                     break
-                
-                chunk_upload = self.create_chunk_upload(ctx, chunk_index, file_enc_key,
-                                                      chunk_data[:bytes_read], bucket_id,
-                                                      encrypted_file_name)
 
-                cids, sizes, proto_chunk, error = to_ipc_proto_chunk(
-                    chunk_upload.chunk_cid, chunk_upload.index, chunk_upload.actual_size,
-                    chunk_upload.blocks)
-                if error:
-                    raise error
+                # Build batch parameters for add_file_chunks.
+                batch_chunk_cids = [self._convert_cid_to_bytes(cd.chunk_upload.chunk_cid) for cd in batch]
+                batch_encoded_sizes = [cd.chunk_upload.encoded_size for cd in batch]
+                batch_block_cids = [cd.cids for cd in batch]
+                batch_block_sizes = [cd.sizes for cd in batch]
 
                 tx_hash = None
                 max_retries = 3
                 for attempt in range(max_retries):
                     try:
-                        tx_hash = self.ipc.storage.add_file_chunk(
+                        tx_hash = self.ipc.storage.add_file_chunks(
                             self.ipc.auth.address, self.ipc.auth.key,
-                            self._convert_cid_to_bytes(chunk_upload.chunk_cid),
-                            bucket_id, encrypted_file_name, chunk_upload.encoded_size,
-                            cids, sizes, chunk_upload.index, nonce_manager=None)
+                            batch_chunk_cids,
+                            bucket_id, encrypted_file_name,
+                            batch_encoded_sizes,
+                            batch_block_cids,
+                            batch_block_sizes,
+                            starting_chunk_index=batch_start_index,
+                            nonce_manager=None)
                         break
                     except Exception as e:
                         error_msg = str(e).lower()
@@ -677,22 +716,22 @@ class IPC:
                             time.sleep(0.5 * (2 ** attempt))
                             continue
                         else:
-                            raise SDKError(f"failed to add file chunk: {str(e)}")
+                            raise SDKError(f"failed to add file chunks: {str(e)}")
 
                 if hasattr(self.ipc, 'wait_for_tx') and tx_hash:
                     self.ipc.wait_for_tx(tx_hash)
                 elif hasattr(self.ipc, 'web3') and tx_hash:
                     receipt = self.ipc.eth.eth.wait_for_transaction_receipt(tx_hash)
                     if receipt.status != 1:
-                        raise SDKError(f"AddFileChunk transaction failed: {tx_hash}")
+                        raise SDKError(f"AddFileChunks transaction failed: {tx_hash}")
 
-                file_upload.state.pre_create_chunk(chunk_upload, tx_hash)
-                
-                self.upload_chunk(ctx, chunk_upload, pool)
+                batch_tx = BatchTransaction(chunks=batch, tx=tx_hash)
 
-                file_upload.state.chunk_uploaded(chunk_upload)
-                total_chunks_uploaded += 1
-                chunk_index += 1
+                for cd in batch_tx.chunks:
+                    file_upload.state.pre_create_chunk(cd.chunk_upload, batch_tx.tx)
+                    self.upload_chunk(ctx, cd.chunk_upload, pool)
+                    file_upload.state.chunk_uploaded(cd.chunk_upload)
+                    total_chunks_uploaded += 1
 
                 time.sleep(0.1)
 
