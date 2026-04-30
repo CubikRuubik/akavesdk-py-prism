@@ -1530,9 +1530,9 @@ class StorageContract:
                                 "type": "uint256"
                             },
                             {
-                                "internalType": "uint256",
+                                "internalType": "uint8",
                                 "name": "blockIndex",
-                                "type": "uint256"
+                                "type": "uint8"
                             },
                             {
                                 "internalType": "string",
@@ -1590,9 +1590,9 @@ class StorageContract:
                                 "type": "uint256"
                             },
                             {
-                                "internalType": "uint256",
+                                "internalType": "uint8",
                                 "name": "blockIndex",
-                                "type": "uint256"
+                                "type": "uint8"
                             },
                             {
                                 "internalType": "string",
