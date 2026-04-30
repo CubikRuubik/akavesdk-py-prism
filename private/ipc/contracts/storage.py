@@ -2067,6 +2067,19 @@ class StorageContract:
                 "outputs": [],
                 "stateMutability": "payable",
                 "type": "function"
+            },
+            {
+                "inputs": [
+                    {
+                        "internalType": "address",
+                        "name": "_upgradeAuthority",
+                        "type": "address"
+                    }
+                ],
+                "name": "setAuthority",
+                "outputs": [],
+                "stateMutability": "nonpayable",
+                "type": "function"
             }
         ]
         
@@ -2796,3 +2809,18 @@ class StorageContract:
             raise Exception(f"Transaction failed. Receipt: {receipt}")
         
         return tx_hash.hex()
+
+    def set_authority(self, account, upgrade_authority: str) -> str:
+        """Set the upgrade authority for this storage contract.
+
+        Args:
+            account: LocalAccount (eth_account) used to sign the transaction.
+            upgrade_authority: Ethereum address of the new upgrade authority.
+
+        Returns:
+            Transaction hash as a hex string.
+        """
+        tx_hash = self.contract.functions.setAuthority(upgrade_authority).transact(
+            {'from': account.address}
+        )
+        return tx_hash.hex() if isinstance(tx_hash, (bytes, bytearray)) else tx_hash

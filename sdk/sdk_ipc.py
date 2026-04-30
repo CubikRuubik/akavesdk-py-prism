@@ -145,6 +145,14 @@ class IPC:
         
         from private.retry.retry import WithRetry
         self.with_retry = with_retry if with_retry is not None else WithRetry(max_attempts=5, base_delay=0.1)
+        self.pool = ConnectionPool()
+
+    def close(self):
+        """Release SDK-level resources including the persistent connection pool."""
+        try:
+            self.pool.close()
+        except Exception as e:
+            logging.warning(f"Error closing connection pool: {str(e)}") 
 
     def latest_block_number(self, ctx) -> BlockInfo:
         """Returns the latest block info from the connected blockchain node."""
@@ -624,7 +632,6 @@ class IPC:
     def _upload_with_comprehensive_debug(self, ctx, file_upload: IPCFileUpload, reader: io.IOBase, bucket_id: bytes,
                                         encrypted_file_name: str, encrypted_bucket_name: str, file_enc_key: bytes,
                                         buffer_size: int) -> IPCFileMetaV2:
-        pool = ConnectionPool()
         try:
             chunk_index = file_upload.state.chunk_count
             total_chunks_uploaded = 0
@@ -688,7 +695,7 @@ class IPC:
 
                 file_upload.state.pre_create_chunk(chunk_upload, tx_hash)
                 
-                self.upload_chunk(ctx, chunk_upload, pool)
+                self.upload_chunk(ctx, chunk_upload)
 
                 file_upload.state.chunk_uploaded(chunk_upload)
                 total_chunks_uploaded += 1
@@ -755,11 +762,6 @@ class IPC:
 
         except Exception as err:
             raise SDKError(f"upload failed: {str(err)}")
-        finally:
-            try:
-                pool.close()
-            except Exception as e:
-                logging.warning(f"Error closing connection pool: {str(e)}")
     
     def _calculate_file_id(self, bucket_id: bytes, file_name: str) -> bytes:
         try:
@@ -855,7 +857,7 @@ class IPC:
         except Exception as err:
             raise SDKError(f"failed to create chunk upload: {str(err)}")
 
-    def upload_chunk(self, ctx, file_chunk_upload: IPCFileChunkUploadV2, pool: ConnectionPool) -> None:
+    def upload_chunk(self, ctx, file_chunk_upload: IPCFileChunkUploadV2) -> None:
         try:
             chunk_cid_str = file_chunk_upload.chunk_cid
             if hasattr(file_chunk_upload.chunk_cid, 'string'):
@@ -881,7 +883,7 @@ class IPC:
                 for i, block in enumerate(file_chunk_upload.blocks):
                     future = executor.submit(
                         self._upload_block,
-                        ctx, pool, i, block, proto_chunk, 
+                        ctx, i, block, proto_chunk, 
                         file_chunk_upload.bucket_id, file_chunk_upload.file_name
                     )
                     futures[future] = i
@@ -897,7 +899,7 @@ class IPC:
         except Exception as err:
             raise SDKError(f"failed to upload chunk: {str(err)}")
 
-    def _upload_block(self, ctx, pool: ConnectionPool, block_index: int, block, proto_chunk, bucket_id, file_name: str) -> None:
+    def _upload_block(self, ctx, block_index: int, block, proto_chunk, bucket_id, file_name: str) -> None:
         try:
             node_address = block.node_address if hasattr(block, 'node_address') else block["node_address"]
             block_data_bytes = block.data if hasattr(block, 'data') else block["data"]
@@ -912,7 +914,7 @@ class IPC:
             
             logging.debug(f"Uploading block {block_index}: CID={block_cid}, node={node_address}")
             
-            result = pool.create_ipc_client(node_address, self.use_connection_pool)
+            result = self.pool.create_ipc_client(node_address, self.use_connection_pool)
             
             if len(result) == 3:
                 client, closer, err = result
@@ -997,7 +999,7 @@ class IPC:
             block_cid = block.cid if hasattr(block, 'cid') else block["cid"]
             raise SDKError(f"failed to upload block {block_cid}: {str(err)}")
 
-    def _upload_block_unary(self, ctx, pool: ConnectionPool, block_index: int, block, proto_chunk, bucket_id, file_name: str) -> None:
+    def _upload_block_unary(self, ctx, block_index: int, block, proto_chunk, bucket_id, file_name: str) -> None:
         """Upload a single file block using the non-streaming (unary) RPC endpoint.
 
         This is an alternative to the streaming ``_upload_block`` method.  It
@@ -1018,7 +1020,7 @@ class IPC:
 
             logging.debug(f"Uploading block (unary) {block_index}: CID={block_cid}, node={node_address}")
 
-            result = pool.create_ipc_client(node_address, self.use_connection_pool)
+            result = self.pool.create_ipc_client(node_address, self.use_connection_pool)
             if len(result) == 3:
                 client, closer, err = result
                 if err:
@@ -1168,7 +1170,6 @@ class IPC:
     def fetch_block_data(
         self, 
         ctx, 
-        pool: ConnectionPool,
         chunk_cid: str, 
         bucket_name: str, 
         file_name: str, 
@@ -1181,7 +1182,7 @@ class IPC:
             if not hasattr(block, 'node_address') or not block.node_address:
                 raise SDKError("missing block metadata")
             
-            client, closer, err = pool.create_ipc_client(block.node_address, self.use_connection_pool)
+            client, closer, err = self.pool.create_ipc_client(block.node_address, self.use_connection_pool)
             if err:
                 raise SDKError(f"failed to create client: {str(err)}")
             
@@ -1352,7 +1353,6 @@ class IPC:
             raise SDKError(f"failed to set public access: {str(err)}")
             
     def download(self, ctx, file_download, writer: io.IOBase):
-        pool = ConnectionPool()
         try:
             file_enc_key = encryption_key(
                 self.encryption_key, 
@@ -1373,7 +1373,6 @@ class IPC:
                 
                 self.download_chunk_blocks(
                     ctx,
-                    pool,
                     file_download.bucket_name,
                     file_download.name,
                     self.ipc.auth.address,
@@ -1385,11 +1384,6 @@ class IPC:
             return None
         except Exception as err:
             raise SDKError(f"failed to download file: {str(err)}")
-        finally:
-            try:
-                pool.close()
-            except Exception as e:
-                logging.warning(f"Error closing connection pool: {str(e)}")
             
     def create_chunk_download(self, ctx, bucket_name: str, file_name: str, chunk):
         try:
@@ -1422,7 +1416,7 @@ class IPC:
         except Exception as err:
             raise SDKError(f"failed to create chunk download: {str(err)}")
             
-    def download_chunk_blocks(self, ctx, pool: ConnectionPool, bucket_name: str, file_name: str, address: str, 
+    def download_chunk_blocks(self, ctx, bucket_name: str, file_name: str, address: str, 
                              chunk_download, file_encryption_key: bytes, writer: io.IOBase):
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_concurrency) as executor:
@@ -1431,7 +1425,7 @@ class IPC:
                 for i, block in enumerate(chunk_download.blocks):
                     futures[executor.submit(
                         self.fetch_block_data,
-                        ctx, pool, chunk_download.cid, bucket_name, file_name, 
+                        ctx, chunk_download.cid, bucket_name, file_name, 
                         address, chunk_download.index, i, block
                     )] = i
                 

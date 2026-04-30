@@ -276,3 +276,25 @@ class Client:
             raise first_error
 
         return results
+    def test_deploy_list_policy(self, user_address: str):
+        """Deploy a ListPolicy contract directly and initialize it with *user_address*.
+
+        This helper is intended for testing only — it does not go through a
+        PolicyFactory.  The returned contract is already initialized.
+
+        Args:
+            user_address: Ethereum address to pass to ``initialize()``.
+
+        Returns:
+            An initialized :class:`~private.ipc.contracts.list_policy.ListPolicyContract`.
+        """
+        from .contracts import deploy_list_policy, ListPolicyContract
+
+        address, tx_hash = deploy_list_policy(self.eth, self.auth)
+        self.wait_for_tx(tx_hash)
+
+        list_policy = ListPolicyContract(self.eth, address)
+        init_tx_hash = list_policy.initialize(self.auth, user_address)
+        self.wait_for_tx(init_tx_hash)
+
+        return list_policy
