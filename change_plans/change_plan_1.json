@@ -1,0 +1,190 @@
+{
+  "meta": {
+    "source_repo": "CubikRuubik/akavesdk-prism (Go)",
+    "target_repo": "CubikRuubik/akavesdk-py-prism",
+    "base_tag": "v0.4.0",
+    "target_tag": "v0.4.4",
+    "created_at": "2025-07-14T00:00:00Z",
+    "description": "Sync from akave Go SDK v0.4.4: storage contract ABI new functions/errors, access manager bytecode update, gRPC NodeAPI removal, error constant additions, connection pool refactoring, and testrand Block() helper."
+  },
+  "execution_order": [
+    "CHANGE-1: Update private/ipc/contracts/storage.py with new ABI functions and errors — apply first",
+    "CHANGE-2: Update private/ipc/contracts/access_manager.py compiled bytecode — apply in parallel with CHANGE-1",
+    "CHANGE-3: Verify private/ipc/errors.py error map is complete — already mostly done, apply any gaps",
+    "CHANGE-4: Remove gRPC NodeAPI/StreamAPI (nodeapi.proto deleted upstream) — verify no equivalent exists",
+    "CHANGE-5: Verify PolicyFactory removal — check if policy_factory.py exists anywhere",
+    "CHANGE-6: Audit SDK connection pool refactoring impact on Python SDK client — apply last"
+  ],
+  "changes": [
+    {
+      "id": "CHANGE-1",
+      "title": "Update Storage contract bindings with new ABI functions and errors",
+      "priority": "critical",
+      "go_files": ["private/ipc/contracts/storage.go"],
+      "target_files": ["private/ipc/contracts/storage.py"],
+      "description": "The Storage smart contract ABI was updated with five new view/transaction functions and five new custom error types. The Python SDK's storage.py (generated ABI binding, 105 KB) must be updated to include the new function call methods.",
+      "current_state": "private/ipc/contracts/storage.py exists (105 449 bytes). It contains auto-generated bindings for the Storage contract. It does NOT contain methods for: add_file_chunks, fill_chunk_blocks (batch variant), get_block_peers_of_chunk, get_buckets_by_ids_with_files, or get_file_index_by_id. The errors NoPeersForCID, NotEligibleToUpgrade, TooManyBlockCIDs, WrongAuthority, InvalidPeerIndex may or may not be present.",
+      "required_change": "Regenerate private/ipc/contracts/storage.py from the updated Storage contract ABI at tag v0.4.4 using web3.py contract binding tools (e.g. abi-to-python or the project's existing generation script). If regenerating is not possible, manually add the following method stubs to the generated contract wrapper class:\n\n1. add_file_chunks(bucket_name: str, file_name: str, chunks: list[dict]) -> TxReceipt\n   Each chunk dict: {\"index\": int (uint64), \"cid\": bytes, \"size\": int (uint256)}\n\n2. fill_chunk_blocks(bucket_name: str, file_name: str, chunk_cid: bytes, args: list[dict]) -> TxReceipt\n   Each args dict: {\"block_index\": int (uint8 — max 255!), \"cid\": bytes, \"node_id\": bytes (32 bytes)}\n   CRITICAL: block_index is uint8 (0–255). Do NOT encode it as uint256.\n\n3. get_block_peers_of_chunk(bucket_name: str, file_name: str, chunk_cid: bytes) -> list[dict]\n   Returns list of {\"cid\": bytes, \"node_id\": bytes}\n\n4. get_buckets_by_ids_with_files(ids: list[int]) -> list[dict]\n   Returns list of {\"bucket\": {\"name\": str, \"id\": int, \"created_at\": int}, \"files\": [...]}\n\n5. get_file_index_by_id(bucket_name: str, file_id: int) -> int\n\nAlso ensure the ABI JSON embedded in the file includes these error entries:\n  {\"type\": \"error\", \"name\": \"NoPeersForCID\", \"inputs\": []}\n  {\"type\": \"error\", \"name\": \"NotEligibleToUpgrade\", \"inputs\": []}\n  {\"type\": \"error\", \"name\": \"TooManyBlockCIDs\", \"inputs\": []}\n  {\"type\": \"error\", \"name\": \"WrongAuthority\", \"inputs\": []}\n  {\"type\": \"error\", \"name\": \"InvalidPeerIndex\", \"inputs\": []}",
+      "code_snippet_before": "// Go storage.go (before) — functions did NOT include batch variants:\nfunc (_Storage *StorageTransactor) FillChunkBlock(opts *bind.TransactOpts, bucketName string, fileName string, chunkCID []byte, blockIndex uint8, cid []byte, nodeID [32]byte) (*types.Transaction, error)",
+      "code_snippet_after": "// Go storage.go (after) — batch variant added:\nfunc (_Storage *StorageTransactor) FillChunkBlocks(opts *bind.TransactOpts, bucketName string, fileName string, chunkCID []byte, args []StorageFillChunkBlockArgs) (*types.Transaction, error)\n// StorageFillChunkBlockArgs: BlockIndex uint8, CID []byte, NodeID [32]byte\n// Also added: AddFileChunks, GetBlockPeersOfChunk, GetBucketsByIdsWithFiles, GetFileIndexById"
+    },
+    {
+      "id": "CHANGE-2",
+      "title": "Update AccessManager compiled bytecode",
+      "priority": "medium",
+      "go_files": ["private/ipc/contracts/access_manager.go"],
+      "target_files": ["private/ipc/contracts/access_manager.py"],
+      "description": "The AccessManager contract was recompiled. The ABI is unchanged; only the compiled bytecode changed. This matters for contract deployment in tests.",
+      "current_state": "private/ipc/contracts/access_manager.py (7 904 bytes). Contains ABI and bytecode for AccessManager. The ABI structure is unchanged; only the bytecode hex string differs from v0.4.4.",
+      "required_change": "Obtain the updated AccessManager bytecode from the akave contracts repository at tag v0.4.4. In access_manager.py, replace the 'bytecode' (and 'deployedBytecode' if present) hex string with the new value. Do NOT change the ABI array.",
+      "code_snippet_before": "// access_manager.go before: Bin: \"0x<old_bytecode>\"",
+      "code_snippet_after": "// access_manager.go after: Bin: \"0x<new_bytecode>\" (ABI unchanged)"
+    },
+    {
+      "id": "CHANGE-3",
+      "title": "Verify and complete error selector map in private/ipc/errors.py",
+      "priority": "high",
+      "go_files": ["private/ipc/errors.go"],
+      "target_files": ["private/ipc/errors.py"],
+      "description": "Go's errors.go gained many new named error constants with EVM selectors plus a new IgnoreOffsetError helper. Python's private/ipc/errors.py already contains most of these, but should be audited for completeness.",
+      "current_state": "private/ipc/errors.py already contains:\n  \"0xc4c1a0c5\": \"BucketNotFound\",\n  \"0x3bcbb0de\": \"FileDoesNotExist\",\n  \"0xa2c09fea\": \"NotThePolicyOwner\",\n  \"0x94289054\": \"CloneArgumentsTooLong\",\n  \"0x4ca249dc\": \"Create2EmptyBytecode\",\n  \"0xf3714a9b\": \"ECDSAInvalidSignatureS\",\n  \"0x367e2e27\": \"ECDSAInvalidSignatureLength\",\n  \"0xf645eedf\": \"ECDSAInvalidSignature\",\n  \"0xb73e95e1\": \"AlreadyWhitelisted\",\n  \"0xe6c4247b\": \"InvalidAddress\",\n  \"0x584a7938\": \"NotWhitelisted\",\n  \"0x227bc153\": \"MathOverflowedMulDiv\",\n  \"0xe7b199a6\": \"InvalidBlocksAmount\",\n  \"0x59b452ef\": \"InvalidBlockIndex\",\n  \"0x55cbc831\": \"LastChunkDuplicate\",\n  \"0x2abde339\": \"FileNotExists\",\n  \"0x48e0ed68\": \"NotSignedByBucketOwner\",\n  \"0x923b8cbb\": \"NonceAlreadyUsed\",\n  \"0x9605a010\": \"OffsetOutOfBounds\".\n  ignore_offset_error() function is already present.\n\nMISSING from private/ipc/errors.py (present in Go v0.4.4 errors.go, not found above):\n  \"0x0d6b18f0\": \"NotBucketOwner\" (selector from Go: ErrNotBucketOwner)",
+      "required_change": "In private/ipc/errors.py, in the error_map dict inside error_hash_to_error(), add:\n  \"0x0d6b18f0\": \"NotBucketOwner\"\n\nAlso add the following from the Go errors.go if not present:\n  Storage contract new errors (verify these selectors are not already mapped by a different name):\n  NoPeersForCID, NotEligibleToUpgrade, TooManyBlockCIDs, WrongAuthority, InvalidPeerIndex\n  (If their selectors are already in the map under different names, leave them as-is.)\n\nNote: Go's IgnoreOffsetError function is already ported as ignore_offset_error() in Python.",
+      "code_snippet_before": "// private/ipc/errors.go — before v0.4.4: these entries were absent:\n// ErrNotBucketOwner, ErrBucketNotFound, ErrFileDoesNotExist, etc.",
+      "code_snippet_after": "// private/ipc/errors.go — after v0.4.4 (Go):\nvar ErrNotBucketOwner = Error{Name: \"NotBucketOwner\", Selector: [4]byte{0x0d, 0x6b, 0x18, 0xf0}}\n// Python equivalent to add:\n// \"0x0d6b18f0\": \"NotBucketOwner\","
+    },
+    {
+      "id": "CHANGE-4",
+      "title": "Remove gRPC NodeAPI / StreamAPI transport layer (nodeapi.proto deleted)",
+      "priority": "medium",
+      "go_files": [
+        "private/pb/nodeapi.proto",
+        "private/pb/nodeapi.pb.go",
+        "private/pb/nodeapi_grpc.pb.go"
+      ],
+      "target_files": ["private/pb/"],
+      "description": "Go deleted private/pb/nodeapi.proto (and generated files) — this was the streaming gRPC service (NodeAPI + StreamAPI) used for non-IPC file operations. The Python repo has private/pb/ipcnodeapi_pb2.py which is a DIFFERENT service (IPC-over-gRPC) and was NOT deleted. Verify no Python file references 'nodeapi' (not 'ipcnodeapi').",
+      "current_state": "private/pb/ in Python contains: __init__.py, ipcnodeapi.proto, ipcnodeapi_pb2.py, ipcnodeapi_pb2_grpc.py. There is NO nodeapi.proto or nodeapi_pb2.py. The Python SDK does not have the streaming NodeAPI service.",
+      "required_change": "Verify that private/pb/ contains ONLY ipcnodeapi-related files. If any nodeapi_pb2.py or nodeapi_pb2_grpc.py files are found, delete them. No action should be needed since the Python repo already uses only the IPC gRPC service."
+    },
+    {
+      "id": "CHANGE-5",
+      "title": "Remove PolicyFactory contract binding (deleted upstream)",
+      "priority": "low",
+      "go_files": ["private/ipc/contracts/policy_factory.go"],
+      "target_files": ["private/ipc/contracts/"],
+      "description": "Go's PolicyFactory contract binding was deleted entirely. Verify the Python contracts directory has no equivalent file.",
+      "current_state": "private/ipc/contracts/ contains: __init__.py, access_manager.py, akave_token.py, erc1967_proxy.py, errors.py, list_policy.py, pdp_verifier.py, sink.py, storage.py. There is no policy_factory.py.",
+      "required_change": "If private/ipc/contracts/policy_factory.py exists, delete it and remove its import from __init__.py. Based on current directory listing, no action is needed."
+    },
+    {
+      "id": "CHANGE-6",
+      "title": "SDK connection pool promoted to struct field (internal refactor)",
+      "priority": "low",
+      "go_files": ["sdk/sdk.go", "sdk/sdk_ipc.go"],
+      "target_files": ["sdk/", "akavesdk/"],
+      "description": "In Go, the per-call connectionPool was promoted to an IPC struct field. Instead of creating a new pool per Upload/Download call and destroying it on return, the pool is now created once when the SDK is initialized (New()) and closed when Close() is called. This improves performance for long-lived SDK instances.",
+      "current_state": "Python SDK is structured differently. The akavesdk/akavesdk.py wraps the Go SDK via gRPC or direct calls. The connection management pattern in Python likely differs from Go.",
+      "required_change": "In sdk/sdk_ipc.py (or equivalent), ensure that any gRPC channel / connection pool used for block uploads/downloads is created once at SDK initialization and reused across Upload, Download, ArchivalMetadata, and DownloadArchival calls, rather than being created and destroyed per operation. If the Python SDK already does this (or delegates to the gRPC stub lifecycle), no change is needed.\n\nAlso note: sdk.Close() in Go now closes both the main connection AND the pool:\n  func (sdk *SDK) Close() error {\n    return errors.Join(sdk.conn.Close(), sdk.pool.close())\n  }\nIf the Python SDK has a close() method, ensure it closes all managed resources."
+    },
+    {
+      "id": "CHANGE-7",
+      "title": "Add Block() test helper to testrand equivalent",
+      "priority": "low",
+      "go_files": ["private/testrand/testrand.go"],
+      "target_files": [],
+      "description": "Go's testrand package gained a Block() function that generates a random IPFS Block with CIDv1/DagProtobuf/SHA2-256 CID and random data. This is used in integration tests.",
+      "current_state": "Python repo has tests/ directory and private/ipctest/ directory. No direct testrand equivalent was identified.",
+      "required_change": "If Python integration tests need to generate random IPFS blocks, add a helper function:\n\n  def random_block(size: int) -> tuple[bytes, str]:\n      data = os.urandom(size)\n      digest = hashlib.sha256(data).digest()\n      mh = encode_multihash(digest, codec=SHA2_256)\n      cid = CIDv1(dag_pb_codec, mh)\n      return data, str(cid)\n\nThis is test-only code and optional."
+    }
+  ],
+  "contract_updates": [
+    {
+      "contract": "Storage",
+      "abi_file": "private/ipc/contracts/storage.py",
+      "added_functions": [
+        {
+          "name": "addFileChunks",
+          "inputs": [
+            {"name": "bucketName", "type": "string"},
+            {"name": "fileName", "type": "string"},
+            {"name": "chunks", "type": "AddChunkArgs[]"}
+          ],
+          "outputs": [],
+          "selector": "computed from ABI hash"
+        },
+        {
+          "name": "fillChunkBlocks",
+          "inputs": [
+            {"name": "bucketName", "type": "string"},
+            {"name": "fileName", "type": "string"},
+            {"name": "chunkCID", "type": "bytes"},
+            {"name": "args", "type": "FillChunkBlockArgs[]"}
+          ],
+          "outputs": [],
+          "selector": "computed from ABI hash"
+        },
+        {
+          "name": "getBlockPeersOfChunk",
+          "inputs": [
+            {"name": "bucketName", "type": "string"},
+            {"name": "fileName", "type": "string"},
+            {"name": "chunkCID", "type": "bytes"}
+          ],
+          "outputs": [{"type": "BlockPeer[]"}],
+          "selector": "computed from ABI hash"
+        },
+        {
+          "name": "getBucketsByIdsWithFiles",
+          "inputs": [{"name": "ids", "type": "uint256[]"}],
+          "outputs": [{"type": "BucketWithFiles[]"}],
+          "selector": "computed from ABI hash"
+        },
+        {
+          "name": "getFileIndexById",
+          "inputs": [
+            {"name": "bucketName", "type": "string"},
+            {"name": "fileId", "type": "uint256"}
+          ],
+          "outputs": [{"type": "uint256"}],
+          "selector": "computed from ABI hash"
+        }
+      ],
+      "removed_functions": [],
+      "modified_functions": [],
+      "encoding_notes": "FillChunkBlockArgs.blockIndex is uint8. In web3.py, encode as Python int (0–255). Do NOT pass as a 32-byte padded value."
+    },
+    {
+      "contract": "AccessManager",
+      "abi_file": "private/ipc/contracts/access_manager.py",
+      "added_functions": [],
+      "removed_functions": [],
+      "modified_functions": [
+        {
+          "name": "(bytecode only)",
+          "change_description": "Recompiled bytecode. ABI is unchanged. Update the bytecode hex string in access_manager.py from the v0.4.4 contracts repository."
+        }
+      ],
+      "encoding_notes": "No ABI encoding changes."
+    }
+  ],
+  "test_updates": [
+    {
+      "id": "TEST-1",
+      "go_test_function": "TestBucketNotFound",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Tests that operating on a non-existent bucket returns 'BucketNotFound' (previously 'failed to get bucket: not found'). The error is now decoded from EVM revert selector 0xc4c1a0c5.",
+      "port_instructions": "In Python integration tests, update any assertion that checks for 'failed to get bucket: not found' or similar legacy messages. The new expected error string is 'BucketNotFound'. Use error_hash_to_error() from private/ipc/errors.py to decode the revert reason and assert the result equals 'BucketNotFound'.\n\nExample:\n  with pytest.raises(Exception) as exc_info:\n      sdk.bucket_get(\"nonexistent-bucket\")\n  decoded = error_hash_to_error(exc_info.value)\n  assert str(decoded) == \"BucketNotFound\"",
+      "dependencies": ["CHANGE-3"]
+    },
+    {
+      "id": "TEST-2",
+      "go_test_function": "TestFileNotFound",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Tests that downloading a non-existent file returns 'BucketNotFound' or 'FileDoesNotExist' (previously 'file not exists').",
+      "port_instructions": "Update Python tests that assert 'file not exists'. The new error strings are 'FileDoesNotExist' (selector 0x3bcbb0de) or 'FileNotExists' (selector 0x2abde339) depending on which contract function reverts. Use error_hash_to_error() to decode and assert the correct name.",
+      "dependencies": ["CHANGE-3"]
+    }
+  ]
+}
