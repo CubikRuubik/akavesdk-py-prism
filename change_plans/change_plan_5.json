@@ -1,0 +1,142 @@
+{
+  "meta": {
+    "source_repo": "akavesdk (Go)",
+    "target_repo": "CubikRuubik/akavesdk-py-prism",
+    "base_tag": "760c3dad",
+    "target_tag": "8b66e30",
+    "created_at": "2026-04-30T15:30:44Z",
+    "description": "Sync from akave repo tag v0.4.4: add named error sentinel exceptions, move connection pool to SDK-level, add SetAuthority to Storage contract, update TestDeployListPolicy to direct deployment"
+  },
+  "execution_order": [
+    "CHANGE-1: Update Storage contract binding — add set_authority() to private/ipc/contracts/storage.py",
+    "CHANGE-2: Add named error sentinel exception classes to private/ipc/errors.py — replace anonymous Exception(name) with typed sentinels",
+    "CHANGE-3: Move connection pool to SDK-level — pool created once in IPC.__init__, closed in IPC.close(); upload_chunk no longer takes pool param",
+    "CHANGE-4: Update deploy_contracts / test_deploy_list_policy — use direct ListPolicy deployment and initialize() call",
+    "CHANGE-5: Port testrand Block() helper for tests"
+  ],
+  "changes": [
+    {
+      "id": "CHANGE-1",
+      "title": "Storage contract: add set_authority() binding",
+      "priority": "high",
+      "go_files": ["private/ipc/contracts/storage.go"],
+      "target_files": ["private/ipc/contracts/storage.py"],
+      "description": "The Storage contract ABI was updated to add a new function setAuthority(_upgradeAuthority address) → transaction. This must be added to the Python contract binding class.",
+      "current_state": "private/ipc/contracts/storage.py does not contain a set_authority method. The StorageContract class wraps the on-chain Storage contract; no setAuthority ABI entry is present.",
+      "required_change": "1. Add the following ABI entry to the storage contract's ABI list in storage.py: { 'inputs': [{'internalType': 'address', 'name': '_upgradeAuthority', 'type': 'address'}], 'name': 'setAuthority', 'outputs': [], 'stateMutability': 'nonpayable', 'type': 'function' }. 2. Add a method set_authority(self, account: LocalAccount, upgrade_authority: str) -> str on the StorageContract class that calls self.contract.functions.setAuthority(upgrade_authority).transact({'from': account.address}) and returns the transaction hash as a hex string.",
+      "code_snippet_before": "// Go storage.go before: no SetAuthority function",
+      "code_snippet_after": "+func (_Storage *StorageTransactor) SetAuthority(opts *bind.TransactOpts, _upgradeAuthority common.Address) (*types.Transaction, error) {\n+\treturn _Storage.contract.Transact(opts, \"setAuthority\", _upgradeAuthority)\n+}"
+    },
+    {
+      "id": "CHANGE-2",
+      "title": "Add named error sentinel exception classes to errors.py",
+      "priority": "high",
+      "go_files": ["private/ipc/errors.go"],
+      "target_files": ["private/ipc/errors.py"],
+      "description": "The Go SDK changed all error hash mappings from anonymous errors.New(\"Name\") to named exported sentinel variables (e.g., ErrBucketNotFound = errors.New(\"BucketNotFound\")). This allows callers to use errors.Is() for type-safe error comparison. The Python equivalent is to define named exception classes or instances so callers can use isinstance() or identity comparison (e.g., `err is ErrBucketNotFound`) instead of comparing string messages.",
+      "current_state": "private/ipc/errors.py defines error_hash_to_error(error_data) which returns Exception(error_map[hash_code]) — these are anonymous Exception instances with the error name as the message. Callers currently check errors by comparing str(err) to the error name string (e.g., str(err) == 'BucketNotFound').",
+      "required_change": "1. Define named exception sentinel instances (or classes) for all 53 contract errors at the top of private/ipc/errors.py. Use a custom base class ContractError(Exception) with a name property. Example: class ContractError(Exception): pass; ErrBucketNotFound = ContractError('BucketNotFound'). 2. Update the error_map in error_hash_to_error to map each hash to the corresponding named sentinel instead of constructing a new Exception. Example: '0xc4c1a0c5': ErrBucketNotFound. 3. Keep the existing behavior where str(err) returns the error name string (e.g., str(ErrBucketNotFound) == 'BucketNotFound') so existing callers checking error strings continue to work. 4. Complete list of sentinels to add (variable name → error message string): ErrBucketAlreadyExists→'BucketAlreadyExists', ErrBucketInvalid→'BucketInvalid', ErrBucketInvalidOwner→'BucketInvalidOwner', ErrBucketNonexists→'BucketNonexists', ErrBucketNonempty→'BucketNonempty', ErrFileAlreadyExists→'FileAlreadyExists', ErrFileInvalid→'FileInvalid', ErrFileNonexists→'FileNonexists', ErrFileNonempty→'FileNonempty', ErrFileNameDuplicate→'FileNameDuplicate', ErrFileFullyUploaded→'FileFullyUploaded', ErrFileChunkDuplicate→'FileChunkDuplicate', ErrBlockAlreadyExists→'BlockAlreadyExists', ErrBlockInvalid→'BlockInvalid', ErrBlockNonexists→'BlockNonexists', ErrInvalidArrayLength→'InvalidArrayLength', ErrInvalidFileBlocksCount→'InvalidFileBlocksCount', ErrInvalidLastBlockSize→'InvalidLastBlockSize', ErrInvalidEncodedSize→'InvalidEncodedSize', ErrInvalidFileCID→'InvalidFileCID', ErrIndexMismatch→'IndexMismatch', ErrNoPolicy→'NoPolicy', ErrFileNotFilled→'FileNotFilled', ErrBlockAlreadyFilled→'BlockAlreadyFilled', ErrChunkCIDMismatch→'ChunkCIDMismatch', ErrNotBucketOwner→'NotBucketOwner', ErrBucketNotFound→'BucketNotFound', ErrFileDoesNotExist→'FileDoesNotExist', ErrNotThePolicyOwner→'NotThePolicyOwner', ErrCloneArgumentsTooLong→'CloneArgumentsTooLong', ErrCreate2EmptyBytecode→'Create2EmptyBytecode', ErrECDSAInvalidSignatureS→'ECDSAInvalidSignatureS', ErrECDSAInvalidSignatureLength→'ECDSAInvalidSignatureLength', ErrECDSAInvalidSignature→'ECDSAInvalidSignature', ErrAlreadyWhitelisted→'AlreadyWhitelisted', ErrInvalidAddress→'InvalidAddress', ErrNotWhitelisted→'NotWhitelisted', ErrMathOverflowedMulDiv→'MathOverflowedMulDiv', ErrInvalidBlocksAmount→'InvalidBlocksAmount', ErrInvalidBlockIndex→'InvalidBlockIndex', ErrLastChunkDuplicate→'LastChunkDuplicate', ErrFileNotExists→'FileNotExists', ErrNotSignedByBucketOwner→'NotSignedByBucketOwner', ErrNonceAlreadyUsed→'NonceAlreadyUsed', ErrOffsetOutOfBounds→'OffsetOutOfBounds'. 5. Export all Err* sentinels via __all__ in private/ipc/__init__.py.",
+      "code_snippet_before": "// Go errors.go before:\ncase \"0xc4c1a0c5\":\n    return errors.New(\"BucketNotFound\")\n// Python errors.py before:\nerror_map = {\n    ...\n    \"0xc4c1a0c5\": \"BucketNotFound\",\n    ...\n}\nif hash_code and hash_code in error_map:\n    return Exception(error_map[hash_code])",
+      "code_snippet_after": "// Go errors.go after:\nErrBucketNotFound = errors.New(\"BucketNotFound\")\n...\ncase \"0xc4c1a0c5\":\n    return ErrBucketNotFound\n// Python equivalent target:\nclass ContractError(Exception): pass\nErrBucketNotFound = ContractError('BucketNotFound')\n...\nerror_map = {\n    ...\n    '0xc4c1a0c5': ErrBucketNotFound,\n    ...\n}\nif hash_code and hash_code in error_map:\n    return error_map[hash_code]"
+    },
+    {
+      "id": "CHANGE-3",
+      "title": "Move connection pool from per-upload to SDK-level persistent field",
+      "priority": "high",
+      "go_files": ["sdk/sdk.go", "sdk/sdk_ipc.go"],
+      "target_files": ["sdk/sdk.py", "sdk/sdk_ipc.py"],
+      "description": "The Go SDK moved the ConnectionPool from being created locally inside each Upload() call (and closed in a defer) to being a persistent field on the IPC struct, initialized when the SDK is created and closed when SDK.Close() is called. This improves performance by reusing connections across multiple upload calls. The upload_chunk method no longer takes a pool parameter.",
+      "current_state": "sdk/sdk_ipc.py line 627: pool = ConnectionPool() is created inside the upload() method, passed to upload_chunk(), and closed in a finally block at line 760. The upload_chunk method signature is: def upload_chunk(self, ctx, file_chunk_upload: IPCFileChunkUploadV2, pool: ConnectionPool). sdk/sdk.py close() method does not close any pool (no pool at SDK level).",
+      "required_change": "1. In sdk/sdk_ipc.py IPC.__init__: add self.pool = ConnectionPool() (import ConnectionPool from sdk/connection.py). 2. Add an IPC.close() method (or update if it exists) to call self.pool.close() in addition to any existing cleanup. 3. In sdk/sdk_ipc.py upload() method: remove the local pool = ConnectionPool() creation (currently line ~627) and the finally block that closes it (lines ~759-762). Instead, use self.pool throughout. 4. Update upload_chunk() method signature from def upload_chunk(self, ctx, file_chunk_upload, pool: ConnectionPool) to def upload_chunk(self, ctx, file_chunk_upload) and replace all pool references inside with self.pool. 5. Update all call sites of upload_chunk to remove the pool argument. 6. In sdk/sdk.py SDK.close(): if SDK creates an IPC instance, ensure ipc.close() is called. 7. Similarly update any download methods that create a local pool (e.g., line ~1355 in sdk_ipc.py: pool = ConnectionPool()) to use self.pool instead.",
+      "sub_changes": [
+        {
+          "id": "CHANGE-3a",
+          "title": "Add pool field to IPC.__init__",
+          "priority": "high",
+          "go_files": ["sdk/sdk.go"],
+          "target_files": ["sdk/sdk_ipc.py"],
+          "description": "Add self.pool = ConnectionPool() to IPC.__init__ or to IPC() constructor.",
+          "current_state": "IPC.__init__ (line ~133) does not initialize a pool field. The SDK struct previously had client pb.NodeAPIClient which was removed.",
+          "required_change": "In IPC.__init__, add: from .connection import ConnectionPool (if not already imported); self.pool = new_connection_pool() or ConnectionPool().",
+          "code_snippet_before": "// Go SDK.go before:\ntype SDK struct {\n    client pb.NodeAPIClient  // removed\n    conn *grpc.ClientConn\n    ...\n}",
+          "code_snippet_after": "// Go SDK.go after:\ntype SDK struct {\n    conn *grpc.ClientConn\n    pool *connectionPool  // added\n    ...\n}\ns := &SDK{\n    conn: conn,\n    pool: newConnectionPool(),\n    ...\n}"
+        },
+        {
+          "id": "CHANGE-3b",
+          "title": "Remove pool parameter from upload_chunk and update call sites",
+          "priority": "high",
+          "go_files": ["sdk/sdk_ipc.go"],
+          "target_files": ["sdk/sdk_ipc.py"],
+          "description": "The Go uploadChunk function no longer takes a pool parameter; it uses sdk.pool. Update Python upload_chunk to match.",
+          "current_state": "def upload_chunk(self, ctx, file_chunk_upload: IPCFileChunkUploadV2, pool: ConnectionPool) at line 858; called at line 691 as self.upload_chunk(ctx, chunk_upload, pool).",
+          "required_change": "Change method signature to def upload_chunk(self, ctx, file_chunk_upload: IPCFileChunkUploadV2). Update all internal pool references to self.pool. Update call at line 691 to self.upload_chunk(ctx, chunk_upload). Remove local pool creation and cleanup from upload().",
+          "code_snippet_before": "-func (sdk *IPC) uploadChunk(ctx context.Context, fileChunkUpload IPCFileChunkUploadV2, pool *connectionPool, blockCount, bytesCount *atomic.Int64, isResuming bool) (err error) {",
+          "code_snippet_after": "+func (sdk *IPC) uploadChunk(ctx context.Context, fileChunkUpload IPCFileChunkUploadV2, blockCount, bytesCount *atomic.Int64, isResuming bool) (err error) {"
+        }
+      ],
+      "code_snippet_before": "// Go sdk_ipc.go before:\npool := newConnectionPool()\ndefer func() {\n    if err := pool.close(); err != nil {\n        slog.Warn(\"failed to close connection\", ...)\n    }\n}()\n...\nsdk.uploadChunk(chunkCtx, chunkUpload, pool, ...)",
+      "code_snippet_after": "// Go sdk_ipc.go after (no local pool; uses sdk.pool):\n// pool variable removed from Upload()\n...\nsdk.uploadChunk(chunkCtx, chunkUpload, sdk.pool, ...)  // pool accessed via sdk"
+    },
+    {
+      "id": "CHANGE-4",
+      "title": "Update test_deploy_list_policy to direct deployment pattern",
+      "priority": "medium",
+      "go_files": ["private/ipc/client.go"],
+      "target_files": ["private/ipc/client.py", "private/ipc/contracts/list_policy.py"],
+      "description": "The Go SDK renamed DeployListPolicy to TestDeployListPolicy and changed its implementation from deploying via PolicyFactory to deploying a ListPolicy contract directly and calling initialize(user_address). The Python code in client.py's deploy_contracts method already calls deploy_list_policy directly (not via PolicyFactory), but the method is used to deploy the base template — the test helper pattern needs to be updated.",
+      "current_state": "private/ipc/client.py line 135 imports deploy_list_policy and line 180 calls: base_list_policy_addr, tx_hash, _ = deploy_list_policy(eth_client, account). This deploys the base list policy. No equivalent of TestDeployListPolicy (deploy + initialize in one call) exists as a Client method in Python.",
+      "required_change": "Add a test_deploy_list_policy(self, user_address: str) -> ListPolicyContract method to the Client class in private/ipc/client.py. Implementation: 1) call deploy_list_policy(self.eth, self.auth) to get (address, tx_hash, contract), 2) call self.wait_for_tx(tx_hash), 3) call list_policy_contract.initialize({'from': self.auth.address}, user_address) to initialize with the given user address, 4) await the initialize transaction with self.wait_for_tx, 5) return the ListPolicy contract instance. This method is intended for test use only. The existing deploy_contracts flow (which only deploys the base template at line 180) should remain unchanged.",
+      "code_snippet_before": "// Go before:\nfunc (client *Client) DeployListPolicy(ctx context.Context, user common.Address) (*contracts.ListPolicy, error) {\n    abiByte, err := client.ListPolicyAbi.Pack(\"initialize\", user)\n    tx, err := client.PolicyFactory.DeployPolicy(client.Auth, abiByte)\n    // ... parse PolicyDeployed event ...\n    listPolicy, err := contracts.NewListPolicy(policyInstance, client.Eth)\n    return listPolicy, nil\n}",
+      "code_snippet_after": "// Go after:\nfunc (client *Client) TestDeployListPolicy(ctx context.Context, user common.Address) (*contracts.ListPolicy, error) {\n    _, tx, listPolicy, err := contracts.DeployListPolicy(client.Auth, client.Eth)\n    if err != nil { return nil, err }\n    client.WaitForTx(ctx, tx.Hash())\n    tx, err = listPolicy.Initialize(client.Auth, user)\n    if err != nil { return nil, err }\n    client.WaitForTx(ctx, tx.Hash())\n    return listPolicy, nil\n}"
+    },
+    {
+      "id": "CHANGE-5",
+      "title": "Port testrand Block() test helper",
+      "priority": "low",
+      "go_files": ["private/testrand/testrand.go"],
+      "target_files": ["private/ipctest/testrand.py"],
+      "description": "A new test utility function Block(t, size) was added to generate a random IPFS-style block with a valid SHA2-256 CID. This is useful for constructing test inputs for upload/chunk operations.",
+      "current_state": "Unknown — need to check if private/ipctest/ or tests/fixtures/ contain a random block generator. If not, this is a new addition.",
+      "required_change": "Add a generate_block(size: int) -> tuple[bytes, str] function to private/ipctest/testrand.py (create file if it does not exist). Implementation: 1) generate os.urandom(size) as data, 2) compute sha256 hash of data, 3) construct a CIDv1 bytes string using multihash format (0x12 for sha2-256, 0x20 length prefix, then the 32-byte hash), 4) encode as base32 CID string for display, 5) return (data_bytes, cid_string). Alternatively use the py-multihash or py-cid library if available.",
+      "code_snippet_before": "// No equivalent before",
+      "code_snippet_after": "// Go after:\nfunc Block(t *testing.T, size memory.Size) blocks.Block {\n    data := Bytes(t, size.ToInt64())\n    mh, err := multihash.Sum(data, multihash.SHA2_256, -1)\n    require.NoError(t, err)\n    c := cid.NewCidV1(cid.Raw, mh)\n    return blocks.NewBlockWithCid(data, c)  // constructs a block with data + CID\n}"
+    }
+  ],
+  "contract_updates": [
+    {
+      "contract": "Storage",
+      "abi_file": "private/ipc/contracts/storage.py",
+      "added_functions": [
+        {
+          "name": "setAuthority",
+          "inputs": [{"name": "_upgradeAuthority", "type": "address", "internalType": "address"}],
+          "outputs": [],
+          "selector": "calculated from keccak256('setAuthority(address)')"
+        }
+      ],
+      "removed_functions": [],
+      "modified_functions": [],
+      "encoding_notes": "setAuthority takes a single Ethereum address parameter; standard ABI encoding applies."
+    }
+  ],
+  "test_updates": [
+    {
+      "id": "TEST-1",
+      "go_test_function": "TestContracts",
+      "go_file": "private/ipc/client_test.go",
+      "type": "integration",
+      "description": "Integration test updated to use TestDeployListPolicy (renamed from DeployListPolicy) which deploys a ListPolicy directly and initializes it rather than going through a PolicyFactory.",
+      "port_instructions": "1. Find any Python integration test that calls DeployListPolicy or an equivalent factory-based list policy deployment. 2. Replace it with a call to client.test_deploy_list_policy(user_address) (once added via CHANGE-4). 3. Verify the returned contract is initialized (e.g., call a read method to confirm the user address was set). 4. The test should NOT require a PolicyFactory contract to be deployed.",
+      "dependencies": ["CHANGE-4"]
+    },
+    {
+      "id": "TEST-2",
+      "go_test_function": "TestExternalDeleteBucketCommand / TestExternalViewBucketCommand / TestExternalFileInfoCommand",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Multiple test cases updated their expectedOutput from 'failed to get bucket: not found' or 'file not exists' to 'BucketNotFound'. This reflects the named sentinel errors now being returned. Python tests that check for these error strings should be updated.",
+      "port_instructions": "1. Search all Python test files for assertions like `assert 'failed to get bucket: not found' in str(err)` or `assert 'file not exists' in str(err)`. 2. Replace these string comparisons with `assert 'BucketNotFound' in str(err)` or use the new named sentinel: `assert err is ErrBucketNotFound or isinstance(err, ContractError) and str(err) == 'BucketNotFound'`. 3. Also update any test that checks for 'file not exists' (lowercase) to check for 'BucketNotFound' as the error message changed.",
+      "dependencies": ["CHANGE-2"]
+    }
+  ]
+}
