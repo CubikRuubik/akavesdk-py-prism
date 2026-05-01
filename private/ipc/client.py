@@ -44,12 +44,10 @@ class BlockInfo:
 class Client:    
     def __init__(self, web3: Web3, auth: LocalAccount, storage: StorageContract, 
                  access_manager: Optional[AccessManagerContract] = None,
-                 list_policy_abi: Optional[dict] = None,
                  addresses: Optional[ContractsAddresses] = None,
                  chain_id: Optional[int] = None):
         self.storage = storage
         self.access_manager = access_manager
-        self.list_policy_abi = list_policy_abi
         self.auth = auth
         self.eth = web3
         self.addresses = addresses or ContractsAddresses()
@@ -85,13 +83,6 @@ class Client:
         if config.access_contract_address:
             access_manager = AccessManagerContract(client, config.access_contract_address)
         
-        list_policy_abi = None
-        try:
-            from .contracts import ListPolicyMetaData
-            list_policy_abi = ListPolicyMetaData.ABI
-        except ImportError:
-            pass  
-        
         addresses = ContractsAddresses(
             storage=config.storage_contract_address,
             access_manager=config.access_contract_address
@@ -102,7 +93,6 @@ class Client:
             auth=account,
             storage=storage, 
             access_manager=access_manager,
-            list_policy_abi=list_policy_abi,
             addresses=addresses,
             chain_id=chain_id
         )
@@ -133,7 +123,7 @@ class Client:
         try:
             from .contracts import (
                 deploy_erc1967_proxy, deploy_access_manager, deploy_list_policy, 
-                StorageContract, AccessManagerContract, ListPolicyMetaData
+                StorageContract, AccessManagerContract
             )
             
             try:
@@ -180,8 +170,6 @@ class Client:
             base_list_policy_addr, tx_hash, _ = deploy_list_policy(eth_client, account)
             client.wait_for_tx(tx_hash)
             
-            client.list_policy_abi = ListPolicyMetaData.ABI
-            
             return client
             
         except ImportError as e:
@@ -189,6 +177,29 @@ class Client:
                 f"Contract deployment functions not available: {e}. "
                 "This feature requires complete contract bindings."
             )
+
+    def test_deploy_list_policy(self, user_address: str) -> 'ListPolicyContract':
+        """Deploy a new ListPolicy contract and initialize it for the given user.
+
+        This is a test helper — it mirrors Go's TestDeployListPolicy which
+        deploys directly (not via factory) then calls initialize().
+
+        Args:
+            user_address: The address to initialize the policy for.
+
+        Returns:
+            The deployed and initialized ListPolicyContract instance.
+        """
+        from .contracts import deploy_list_policy, ListPolicyContract
+
+        contract_address, tx_hash = deploy_list_policy(self.eth, self.auth)
+        self.wait_for_tx(tx_hash)
+
+        list_policy = ListPolicyContract(self.eth, contract_address)
+        init_tx_hash = list_policy.initialize(self.auth, user_address)
+        self.wait_for_tx(init_tx_hash)
+
+        return list_policy
 
     def chain_id(self) -> int:
         return self._chain_id
