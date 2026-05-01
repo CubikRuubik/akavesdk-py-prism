@@ -1,0 +1,222 @@
+{
+  "meta": {
+    "source_repo": "akavesdk (Go)",
+    "target_repo": "CubikRuubik/akavesdk-py-prism",
+    "base_tag": "760c3da",
+    "target_tag": "8b66e30",
+    "created_at": "2026-05-01T08:40:50Z",
+    "description": "Sync from akave repo tag v0.4.4: remove list_policy_abi from Client, rename deploy_list_policy to test_deploy_list_policy, add error sentinel constants, update Storage and AccessManager ABIs, remove legacy NodeAPI proto references"
+  },
+  "execution_order": [
+    "CHANGE-1: Update AccessManager contract ABI — apply first as downstream changes depend on it",
+    "CHANGE-2: Update Storage contract ABI — apply before logic changes",
+    "CHANGE-3: Add named error sentinel constants — apply after ABI updates",
+    "CHANGE-4: Remove list_policy_abi from Client struct and dial() — apply after error changes",
+    "CHANGE-5: Rename deploy_list_policy usage to test_deploy_list_policy semantics — apply after struct cleanup",
+    "CHANGE-6: Remove legacy NodeAPI proto references — apply last as it is low-impact",
+    "CHANGE-7: Add Block test helper equivalent — apply last as it is test-only"
+  ],
+  "changes": [
+    {
+      "id": "CHANGE-1",
+      "title": "Update AccessManager contract ABI",
+      "priority": "high",
+      "go_files": [
+        "private/ipc/contracts/access_manager.go"
+      ],
+      "target_files": [
+        "private/ipc/contracts/access_manager.py"
+      ],
+      "description": "The AccessManager contract ABI (and bytecode) was updated in the Go binding file. The Python repo maintains its own ABI-based contract wrapper in access_manager.py. The ABI string and bytecode must be updated to match the new version.",
+      "current_state": "private/ipc/contracts/access_manager.py contains an AccessManagerContract class that wraps the AccessManager ABI. It exposes methods: get_validate_access, get_validate_access_to_bucket, delegate_access, remove_access, set_policy, set_bucket_policy, set_file_policy, change_public_access, get_file_access_info, is_bucket_owner_or_delegate, set_storage_contract. The ABI is embedded in the file via an AccessManagerMetaData class.",
+      "required_change": "1. Obtain the updated AccessManager ABI from the Go source file private/ipc/contracts/access_manager.go (the ABI string is the value of the `ABI` field of `AccessManagerMetaData`). 2. Parse the ABI JSON to extract the updated function and error definitions. 3. Update the ABI dict in private/ipc/contracts/access_manager.py to match the new ABI. 4. Review each wrapped method to ensure input/output types still match. 5. Update the bytecode (Bin) if the file is used for contract deployment.",
+      "code_snippet_before": "var AccessManagerMetaData = &bind.MetaData{\n    ABI: \"[...old ABI string...]\",\n    Bin: \"0x...old bytecode...\",\n}",
+      "code_snippet_after": "var AccessManagerMetaData = &bind.MetaData{\n    ABI: \"[...new ABI string from updated Go file...]\",\n    Bin: \"0x...new bytecode...\",\n}"
+    },
+    {
+      "id": "CHANGE-2",
+      "title": "Update Storage contract ABI",
+      "priority": "high",
+      "go_files": [
+        "private/ipc/contracts/storage.go"
+      ],
+      "target_files": [
+        "private/ipc/contracts/storage.py"
+      ],
+      "description": "The Storage contract ABI was updated with 23 additions and 2 deletions in the Go binding file. The Python repo maintains a storage.py wrapper. The ABI and bytecode must be updated.",
+      "current_state": "private/ipc/contracts/storage.py contains a FileStorageContract (also referenced as StorageContract) class wrapping the Storage ABI via web3. It exposes methods for bucket/file/block operations. The ABI is embedded in the file.",
+      "required_change": "1. Obtain the updated Storage ABI from the Go source file private/ipc/contracts/storage.go (the ABI string is the value of the `ABI` field of `StorageMetaData`). 2. Parse the updated ABI. 3. Update the ABI dict in private/ipc/contracts/storage.py. 4. Review each wrapped method for signature compatibility. 5. Update bytecode (Bin) if used for deployment.",
+      "code_snippet_before": "var StorageMetaData = &bind.MetaData{\n    ABI: \"[...old ABI with 22 fewer additions...]\",",
+      "code_snippet_after": "var StorageMetaData = &bind.MetaData{\n    ABI: \"[...new ABI — 23 lines added, 2 removed...]\","
+    },
+    {
+      "id": "CHANGE-3",
+      "title": "Add named error sentinel constants",
+      "priority": "high",
+      "go_files": [
+        "private/ipc/errors.go"
+      ],
+      "target_files": [
+        "private/ipc/errors.py"
+      ],
+      "description": "Go refactored all inline errors.New() calls into package-level sentinel variables. This allows callers to use errors.Is(err, ipc.ErrBucketNotFound) for comparison. The Python equivalent is to define module-level exception instances or exception classes so callers can use isinstance() or direct comparison instead of string matching.",
+      "current_state": "private/ipc/errors.py defines error_hash_to_error() which returns Exception(error_name_string) for each known hash. The error_map dict already contains all 45 hash-to-name mappings. However, no named sentinel constants exist — callers must do string matching (str(err) == 'BucketNotFound') to identify specific errors. Current error_map is complete and includes all hashes from the new Go code:\n```python\nerror_map = {\n    \"0x497ef2c2\": \"BucketAlreadyExists\",\n    \"0x4f4b202a\": \"BucketInvalid\",\n    ...\n    \"0xc4c1a0c5\": \"BucketNotFound\",\n    \"0x3bcbb0de\": \"FileDoesNotExist\",\n    ...\n    \"0x9605a010\": \"OffsetOutOfBounds\",\n}\n```",
+      "required_change": "1. Define a named exception class or sentinel for each error, for example:\n```python\nclass IPCContractError(Exception):\n    pass\n\nErrBucketAlreadyExists = IPCContractError('BucketAlreadyExists')\nErrBucketInvalid = IPCContractError('BucketInvalid')\nErrBucketInvalidOwner = IPCContractError('BucketInvalidOwner')\nErrBucketNonexists = IPCContractError('BucketNonexists')\nErrBucketNonempty = IPCContractError('BucketNonempty')\nErrFileAlreadyExists = IPCContractError('FileAlreadyExists')\nErrFileInvalid = IPCContractError('FileInvalid')\nErrFileNonexists = IPCContractError('FileNonexists')\nErrFileNonempty = IPCContractError('FileNonempty')\nErrFileNameDuplicate = IPCContractError('FileNameDuplicate')\nErrFileFullyUploaded = IPCContractError('FileFullyUploaded')\nErrFileChunkDuplicate = IPCContractError('FileChunkDuplicate')\nErrBlockAlreadyExists = IPCContractError('BlockAlreadyExists')\nErrBlockInvalid = IPCContractError('BlockInvalid')\nErrBlockNonexists = IPCContractError('BlockNonexists')\nErrInvalidArrayLength = IPCContractError('InvalidArrayLength')\nErrInvalidFileBlocksCount = IPCContractError('InvalidFileBlocksCount')\nErrInvalidLastBlockSize = IPCContractError('InvalidLastBlockSize')\nErrInvalidEncodedSize = IPCContractError('InvalidEncodedSize')\nErrInvalidFileCID = IPCContractError('InvalidFileCID')\nErrIndexMismatch = IPCContractError('IndexMismatch')\nErrNoPolicy = IPCContractError('NoPolicy')\nErrFileNotFilled = IPCContractError('FileNotFilled')\nErrBlockAlreadyFilled = IPCContractError('BlockAlreadyFilled')\nErrChunkCIDMismatch = IPCContractError('ChunkCIDMismatch')\nErrNotBucketOwner = IPCContractError('NotBucketOwner')\nErrBucketNotFound = IPCContractError('BucketNotFound')\nErrFileDoesNotExist = IPCContractError('FileDoesNotExist')\nErrNotThePolicyOwner = IPCContractError('NotThePolicyOwner')\nErrCloneArgumentsTooLong = IPCContractError('CloneArgumentsTooLong')\nErrCreate2EmptyBytecode = IPCContractError('Create2EmptyBytecode')\nErrECDSAInvalidSignatureS = IPCContractError('ECDSAInvalidSignatureS')\nErrECDSAInvalidSignatureLength = IPCContractError('ECDSAInvalidSignatureLength')\nErrECDSAInvalidSignature = IPCContractError('ECDSAInvalidSignature')\nErrAlreadyWhitelisted = IPCContractError('AlreadyWhitelisted')\nErrInvalidAddress = IPCContractError('InvalidAddress')\nErrNotWhitelisted = IPCContractError('NotWhitelisted')\nErrMathOverflowedMulDiv = IPCContractError('MathOverflowedMulDiv')\nErrInvalidBlocksAmount = IPCContractError('InvalidBlocksAmount')\nErrInvalidBlockIndex = IPCContractError('InvalidBlockIndex')\nErrLastChunkDuplicate = IPCContractError('LastChunkDuplicate')\nErrFileNotExists = IPCContractError('FileNotExists')\nErrNotSignedByBucketOwner = IPCContractError('NotSignedByBucketOwner')\nErrNonceAlreadyUsed = IPCContractError('NonceAlreadyUsed')\nErrOffsetOutOfBounds = IPCContractError('OffsetOutOfBounds')\n```\n2. Update error_hash_to_error() to return the pre-declared sentinel instead of a new Exception:\n```python\nerror_map = {\n    \"0x497ef2c2\": ErrBucketAlreadyExists,\n    \"0x4f4b202a\": ErrBucketInvalid,\n    ...\n}\n```\n3. Export all sentinel constants in __init__.py so callers can do: `from private.ipc.errors import ErrBucketNotFound`.",
+      "code_snippet_before": "// private/ipc/errors.go (before — inline, for the NotBucketOwner entry):\ncase \"0x0d6b18f0\":\n    return errors.New(\"NotBucketOwner\")\ncase \"0xc4c1a0c5\":\n    return errors.New(\"BucketNotFound\")",
+      "code_snippet_after": "// private/ipc/errors.go (after — sentinels):\nvar ErrNotBucketOwner = errors.New(\"NotBucketOwner\")\nvar ErrBucketNotFound = errors.New(\"BucketNotFound\")\n...\ncase \"0x0d6b18f0\":\n    return ErrNotBucketOwner\ncase \"0xc4c1a0c5\":\n    return ErrBucketNotFound"
+    },
+    {
+      "id": "CHANGE-4",
+      "title": "Remove list_policy_abi from Client struct and dial()",
+      "priority": "medium",
+      "go_files": [
+        "private/ipc/client.go"
+      ],
+      "target_files": [
+        "private/ipc/client.py"
+      ],
+      "description": "Go removed ListPolicyAbi (and PolicyFactoryAbi) from the Client struct and from the Dial() function. The rationale: these ABIs were only needed for the PolicyFactory-based deployment pattern, which is now removed. ListPolicy is now deployed directly without ABI packing. The Python Client.__init__ still has a list_policy_abi parameter and self.list_policy_abi field, which should be removed.",
+      "current_state": "private/ipc/client.py Client.__init__:\n```python\ndef __init__(self, web3: Web3, auth: LocalAccount, storage: StorageContract,\n             access_manager: Optional[AccessManagerContract] = None,\n             list_policy_abi: Optional[dict] = None,  # <-- to remove\n             addresses: Optional[ContractsAddresses] = None,\n             chain_id: Optional[int] = None):\n    self.storage = storage\n    self.access_manager = access_manager\n    self.list_policy_abi = list_policy_abi  # <-- to remove\n    ...\n```\nIn dial():\n```python\nlist_policy_abi = None\ntry:\n    from .contracts import ListPolicyMetaData\n    list_policy_abi = ListPolicyMetaData.ABI\nexcept ImportError:\n    pass\n...\nipc_client = cls(\n    ...\n    list_policy_abi=list_policy_abi,  # <-- to remove\n    ...\n)\n```\nIn deploy_contracts():\n```python\nclient.list_policy_abi = ListPolicyMetaData.ABI  # <-- to remove\n```",
+      "required_change": "1. Remove the `list_policy_abi` parameter from `Client.__init__` signature.\n2. Remove `self.list_policy_abi = list_policy_abi` from `__init__` body.\n3. Remove the `list_policy_abi` loading block from `dial()` (lines that import `ListPolicyMetaData` and set `list_policy_abi`).\n4. Remove `list_policy_abi=list_policy_abi` from the `cls(...)` call inside `dial()`.\n5. Remove `client.list_policy_abi = ListPolicyMetaData.ABI` from `deploy_contracts()`.\n6. Check if `ListPolicyMetaData` import in `deploy_contracts` can also be removed (only keep `deploy_list_policy` import, not `ListPolicyMetaData`).\n7. Verify no other code reads `client.list_policy_abi` — if any call site does, update it to load the ABI directly from the contract module instead.",
+      "code_snippet_before": "// private/ipc/client.go (Go, before):\ntype Client struct {\n    Storage          *contracts.Storage\n    AccessManager    *contracts.AccessManager\n    PolicyFactory    *contracts.PolicyFactory\n    ListPolicyAbi    *abi.ABI                 // <-- removed\n    PolicyFactoryAbi *abi.ABI                 // <-- removed\n    Auth             *bind.TransactOpts\n    Eth              *ethclient.Client\n    Addresses        ContractsAddresses\n    chainID          *big.Int\n}\n// In Dial():\nlpAbi, err := contracts.ListPolicyMetaData.GetAbi()\n...\npfAbi, err := contracts.PolicyFactoryMetaData.GetAbi()\n...\nipcClient := &Client{\n    Storage:          storage,\n    AccessManager:    accessManager,\n    ListPolicyAbi:    lpAbi,       // <-- removed\n    PolicyFactoryAbi: pfAbi,       // <-- removed\n    ...\n}",
+      "code_snippet_after": "// private/ipc/client.go (Go, after):\ntype Client struct {\n    Storage       *contracts.Storage\n    AccessManager *contracts.AccessManager\n    Auth          *bind.TransactOpts\n    Eth           *ethclient.Client\n    Addresses     ContractsAddresses\n    chainID       *big.Int\n}\n// In Dial() — ABI loading removed:\nipcClient := &Client{\n    Storage:       storage,\n    AccessManager: accessManager,\n    ...\n}"
+    },
+    {
+      "id": "CHANGE-5",
+      "title": "Align deploy_list_policy with TestDeployListPolicy semantics",
+      "priority": "medium",
+      "go_files": [
+        "private/ipc/client.go",
+        "private/ipc/client_test.go"
+      ],
+      "target_files": [
+        "private/ipc/client.py",
+        "private/ipc/contracts/list_policy.py"
+      ],
+      "description": "Go renamed DeployListPolicy to TestDeployListPolicy and changed its implementation from factory-based deployment to direct deployment followed by Initialize(). The Python code already deploys ListPolicy directly (without a factory), which matches the new Go approach. However, the deploy_contracts method deploys the base contract without calling initialize(), while the new Go TestDeployListPolicy calls Initialize() after deployment.",
+      "current_state": "private/ipc/contracts/list_policy.py has deploy_list_policy() which deploys the contract but the return value signature needs checking. private/ipc/client.py deploy_contracts() calls:\n```python\nbase_list_policy_addr, tx_hash, _ = deploy_list_policy(eth_client, account)\nclient.wait_for_tx(tx_hash)\nclient.list_policy_abi = ListPolicyMetaData.ABI  # <-- being removed in CHANGE-4\n```",
+      "required_change": "1. After removing list_policy_abi from CHANGE-4, also check that the deploy_list_policy() call in deploy_contracts() still does not call initialize() for the base contract (the base contract is deployed without initialization — only the clone/deployed instances call initialize).\n2. If Python has a test or client method that deploys and initializes a ListPolicy for a specific user, rename it to test_deploy_list_policy (or equivalent snake_case) to match the Go rename.\n3. Update the implementation: the function should (a) call deploy_list_policy() to get the contract instance, (b) call contract.initialize(user_address) on the result, (c) wait for the tx, then return the contract.\n4. The function is test-only (indicated by the 'Test' prefix in Go) — mark it or document it as such in Python.",
+      "code_snippet_before": "// private/ipc/client.go (old DeployListPolicy via factory):\nfunc (client *Client) DeployListPolicy(ctx context.Context, user common.Address) (*contracts.ListPolicy, error) {\n    abiByte, err := client.ListPolicyAbi.Pack(\"initialize\", user)\n    tx, err := client.PolicyFactory.DeployPolicy(client.Auth, abiByte)\n    // parse PolicyDeployed event to find new contract address\n    ...\n    listPolicy, err := contracts.NewListPolicy(policyInstance, client.Eth)\n    return listPolicy, nil\n}",
+      "code_snippet_after": "// private/ipc/client.go (new TestDeployListPolicy — direct deploy + initialize):\nfunc (client *Client) TestDeployListPolicy(ctx context.Context, user common.Address) (*contracts.ListPolicy, error) {\n    _, tx, listPolicy, err := contracts.DeployListPolicy(client.Auth, client.Eth)\n    if err != nil { return nil, err }\n    if err := client.WaitForTx(ctx, tx.Hash()); err != nil { return nil, err }\n    tx, err = listPolicy.Initialize(client.Auth, user)\n    if err != nil { return nil, err }\n    if err := client.WaitForTx(ctx, tx.Hash()); err != nil { return nil, err }\n    return listPolicy, nil\n}"
+    },
+    {
+      "id": "CHANGE-6",
+      "title": "Remove legacy NodeAPI proto references",
+      "priority": "low",
+      "go_files": [
+        "private/pb/nodeapi.proto",
+        "private/pb/nodeapi.pb.go",
+        "private/pb/nodeapi_grpc.pb.go"
+      ],
+      "target_files": [],
+      "description": "The old NodeAPI gRPC service definition was completely removed from the Go repo. The Python repo uses private/pb/ipcnodeapi_pb2.py and ipcnodeapi_pb2_grpc.py which correspond to the ipcnodeapi.proto (not nodeapi.proto). No action needed.",
+      "current_state": "private/pb/ in the Python repo contains ipcnodeapi_pb2.py, ipcnodeapi_pb2_grpc.py. No nodeapi_pb2.py exists. The Python repo was already using only the IPC Node API proto.",
+      "required_change": "No action required. Verify: `ls private/pb/` should NOT contain any nodeapi_pb2.py or nodeapi_pb2_grpc.py files. Only ipcnodeapi_pb2.py and ipcnodeapi_pb2_grpc.py should be present.",
+      "code_snippet_before": "// private/pb/nodeapi.proto (removed entirely — defined service NodeAPI)",
+      "code_snippet_after": "// File deleted from Go repo. Python equivalent was never present."
+    },
+    {
+      "id": "CHANGE-7",
+      "title": "Add Block test helper equivalent",
+      "priority": "low",
+      "go_files": [
+        "private/testrand/testrand.go"
+      ],
+      "target_files": [
+        "private/ipctest/"
+      ],
+      "description": "A new Block(t, size) test helper was added to Go's testrand package. It generates a random IPFS block with a valid CIDv1/dag-pb/sha2-256 CID.",
+      "current_state": "private/ipctest/ exists in the Python repo. Test utilities may be present but a generic random block generator may not exist.",
+      "required_change": "Optionally add a test helper function in Python (e.g., in private/ipctest/test_helpers.py or similar):\n```python\ndef random_block(size: int) -> tuple[bytes, str]:\n    \"\"\"Generate random data and a corresponding CIDv1/dag-pb/sha2-256 CID.\"\"\"\n    import os\n    from multiformats import CID, multihash as mh\n    data = os.urandom(size)\n    digest = mh.digest(data, 'sha2-256')\n    cid = CID('base32', 1, 'dag-pb', digest)\n    return data, str(cid)\n```\nThis helper is only needed if new tests require randomly generated blocks.",
+      "code_snippet_before": "// private/testrand/testrand.go — function did not exist",
+      "code_snippet_after": "// private/testrand/testrand.go (added):\nfunc Block(t *testing.T, size memory.Size) blocks.Block {\n    t.Helper()\n    data := Bytes(t, size.ToInt64())\n    mh, err := multihash.Sum(data, multihash.SHA2_256, -1)\n    require.NoError(t, err)\n    c := cid.NewCidV1(cid.DagProtobuf, mh)\n    block, err := blocks.NewBlockWithCid(data, c)\n    require.NoError(t, err)\n    return block\n}"
+    },
+    {
+      "id": "CHANGE-8",
+      "title": "Promote connection pool to SDK-level shared field",
+      "priority": "medium",
+      "go_files": [
+        "sdk/sdk.go",
+        "sdk/sdk_ipc.go"
+      ],
+      "target_files": [
+        "sdk/sdk.py",
+        "akavesdk/akavesdk.py"
+      ],
+      "description": "Go moved the connection pool from per-operation (created and closed inside Upload/Download/DownloadArchival/ArchivalMetadata) to a single SDK-level shared field. This improves connection reuse across operations. The Python SDK should evaluate whether it creates gRPC/HTTP connections per-operation or reuses them.",
+      "current_state": "The Python SDK in sdk/ or akavesdk/ manages connections to node addresses. Connection pooling behavior depends on the Python SDK implementation. Review akavesdk/akavesdk.py and sdk/ for any per-operation connection creation patterns.",
+      "required_change": "1. Review the Python SDK for per-operation connection creation to block node addresses.\n2. If connections to node addresses are created per-operation (per block upload/download), refactor to maintain a dictionary/pool of reusable connections keyed by node address.\n3. Ensure the pool is closed when the SDK instance is closed/destroyed.\n4. The pool should be initialized when the SDK object is constructed, not per-operation.\n5. This is a performance optimization — implement only if the Python SDK has measurable connection overhead.",
+      "code_snippet_before": "// sdk/sdk_ipc.go (before — pool created per-operation in Upload):\npool := newConnectionPool()\ndefer func() {\n    if err := pool.close(); err != nil {\n        slog.Warn(\"failed to close connection\", ...)\n    }\n}()\n...\nif err := sdk.uploadChunk(chunkCtx, chunkUpload, pool, ...); err != nil { ... }",
+      "code_snippet_after": "// sdk/sdk_ipc.go (after — pool on receiver, closed by SDK.Close()):\nfunc (sdk *SDK) Close() error {\n    return errors.Join(sdk.conn.Close(), sdk.pool.close())\n}\n...\nif err := sdk.uploadChunk(chunkCtx, chunkUpload, ...); err != nil { ... }\n// Inside uploadChunk:\nclient, closer, err := sdk.pool.createIPCClient(block.NodeAddress, sdk.useConnectionPool)"
+    },
+    {
+      "id": "CHANGE-9",
+      "title": "Update error message expectations in CLI tests",
+      "priority": "low",
+      "go_files": [
+        "cmd/akavecli/storage_test.go"
+      ],
+      "target_files": [
+        "tests/"
+      ],
+      "description": "CLI tests updated expected error strings from 'failed to get bucket: not found' / 'file not exists' to 'BucketNotFound'. This is a direct consequence of CHANGE-3: error sentinels now return the canonical contract error name string.",
+      "current_state": "Python test files in tests/ may assert on error message strings. The Python error_hash_to_error() already returns Exception('BucketNotFound') — so the string representation is already 'BucketNotFound'. Any existing tests that assert 'not found' or similar would need updating.",
+      "required_change": "1. Search Python tests for string assertions like 'not found', 'file not exists', 'bucket not found'. 2. Update them to assert 'BucketNotFound', 'FileDoesNotExist', etc. (the canonical contract error names). 3. After CHANGE-3 is applied (sentinel constants), tests can use isinstance(err, IPCContractError) and str(err) == 'BucketNotFound' for more robust assertions.",
+      "code_snippet_before": "# Python test (old):\nassert 'not found' in str(error)  # or similar",
+      "code_snippet_after": "# Python test (new):\nassert str(error) == 'BucketNotFound'  # canonical name\n# Or after CHANGE-3:\nfrom private.ipc.errors import ErrBucketNotFound\nassert error is ErrBucketNotFound  # identity check"
+    }
+  ],
+  "contract_updates": [
+    {
+      "contract": "AccessManager",
+      "abi_file": "private/ipc/contracts/access_manager.py",
+      "added_functions": [],
+      "removed_functions": [],
+      "modified_functions": [
+        {
+          "name": "AccessManagerMetaData (ABI)",
+          "change_description": "The ABI string was updated (1 line added, 1 line removed in Go binding). The Python access_manager.py must reflect any changes in function signatures, error types, or event definitions. The contract interface (delegateAccess, removeAccess, setPolicy, etc.) appears unchanged based on the small diff size."
+        }
+      ],
+      "encoding_notes": "No type changes observed from the diff. AccessManager errors remain: BucketNotFound, FileDoesNotExist, InvalidAddress, NoDelegatedAccess, NoPolicy, NotBucketOwner."
+    },
+    {
+      "contract": "Storage",
+      "abi_file": "private/ipc/contracts/storage.py",
+      "added_functions": [],
+      "removed_functions": [],
+      "modified_functions": [
+        {
+          "name": "StorageMetaData (ABI)",
+          "change_description": "23 additions, 2 deletions in storage.go. The Python storage.py wrapper must be regenerated or manually updated from the new ABI."
+        }
+      ],
+      "encoding_notes": "Review the new ABI for any parameter type changes (e.g. uint8 → uint256) that would affect how function call data is encoded by web3.py."
+    }
+  ],
+  "test_updates": [
+    {
+      "id": "TEST-1",
+      "go_test_function": "TestContracts",
+      "go_file": "private/ipc/client_test.go",
+      "type": "integration",
+      "description": "Integration test updated to use TestDeployListPolicy (renamed from DeployListPolicy). Verifies: deploy ListPolicy directly, call AssignRole, call ValidateAccess and assert True.",
+      "port_instructions": "1. If a Python integration test exists for list policy deployment, rename it or update it to use the direct deploy + initialize pattern. 2. Ensure the test: (a) calls deploy_list_policy(w3, account) to get contract address, (b) calls contract.initialize(user_address) on the result, (c) calls contract.assign_role(address), (d) calls contract.validate_access(address, b'') and asserts result is True. 3. Remove any PolicyFactory usage if present.",
+      "dependencies": [
+        "CHANGE-4",
+        "CHANGE-5"
+      ]
+    },
+    {
+      "id": "TEST-2",
+      "go_test_function": "TestExternalDeleteBucketCommand, TestExternalViewBucketCommand, TestExternalFileInfoCommand",
+      "go_file": "cmd/akavecli/storage_test.go",
+      "type": "integration",
+      "description": "Expected error strings updated from 'failed to get bucket: not found'/'file not exists' to canonical contract error names like 'BucketNotFound'.",
+      "port_instructions": "1. Search Python tests for 'not found', 'file not exists'. 2. Update assertions to expect 'BucketNotFound', 'FileDoesNotExist' — the exact strings returned by error_hash_to_error(). 3. After CHANGE-3: update assertions to use sentinel comparison where possible.",
+      "dependencies": [
+        "CHANGE-3"
+      ]
+    }
+  ]
+}
