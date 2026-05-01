@@ -44,12 +44,10 @@ class BlockInfo:
 class Client:    
     def __init__(self, web3: Web3, auth: LocalAccount, storage: StorageContract, 
                  access_manager: Optional[AccessManagerContract] = None,
-                 list_policy_abi: Optional[dict] = None,
                  addresses: Optional[ContractsAddresses] = None,
                  chain_id: Optional[int] = None):
         self.storage = storage
         self.access_manager = access_manager
-        self.list_policy_abi = list_policy_abi
         self.auth = auth
         self.eth = web3
         self.addresses = addresses or ContractsAddresses()
@@ -85,13 +83,6 @@ class Client:
         if config.access_contract_address:
             access_manager = AccessManagerContract(client, config.access_contract_address)
         
-        list_policy_abi = None
-        try:
-            from .contracts import ListPolicyMetaData
-            list_policy_abi = ListPolicyMetaData.ABI
-        except ImportError:
-            pass  
-        
         addresses = ContractsAddresses(
             storage=config.storage_contract_address,
             access_manager=config.access_contract_address
@@ -102,7 +93,6 @@ class Client:
             auth=account,
             storage=storage, 
             access_manager=access_manager,
-            list_policy_abi=list_policy_abi,
             addresses=addresses,
             chain_id=chain_id
         )
@@ -133,7 +123,7 @@ class Client:
         try:
             from .contracts import (
                 deploy_erc1967_proxy, deploy_access_manager, deploy_list_policy, 
-                StorageContract, AccessManagerContract, ListPolicyMetaData
+                StorageContract, AccessManagerContract
             )
             
             try:
@@ -177,10 +167,8 @@ class Client:
             tx_hash = storage.set_access_manager(account, access_addr)
             client.wait_for_tx(tx_hash)
             
-            base_list_policy_addr, tx_hash, _ = deploy_list_policy(eth_client, account)
+            base_list_policy_addr, tx_hash = deploy_list_policy(eth_client, account)
             client.wait_for_tx(tx_hash)
-            
-            client.list_policy_abi = ListPolicyMetaData.ABI
             
             return client
             
@@ -276,3 +264,27 @@ class Client:
             raise first_error
 
         return results
+
+    def test_deploy_list_policy(self, user_address: str) -> 'ListPolicyContract':
+        """Deploy a ListPolicy contract and initialize it for a specific user.
+
+        This is a test-only helper (mirrors Go's TestDeployListPolicy). It
+        performs a direct deploy followed by ``initialize(user_address)`` rather
+        than going through a factory contract.
+
+        Args:
+            user_address: Ethereum address to set as the policy owner.
+
+        Returns:
+            An initialized :class:`ListPolicyContract` instance.
+        """
+        from .contracts import deploy_list_policy, ListPolicyContract
+
+        contract_address, tx_hash = deploy_list_policy(self.eth, self.auth)
+        self.wait_for_tx(tx_hash)
+
+        list_policy = ListPolicyContract(self.eth, contract_address)
+        init_tx_hash = list_policy.initialize(self.auth, user_address)
+        self.wait_for_tx(init_tx_hash)
+
+        return list_policy
